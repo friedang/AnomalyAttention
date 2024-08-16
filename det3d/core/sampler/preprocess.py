@@ -118,7 +118,7 @@ def filter_gt_box_outside_range(gt_boxes, limit_range):
     bounding_box = box_np_ops.minmax_to_corner_2d(
         np.asarray(limit_range)[np.newaxis, ...]
     )
-    ret = points_in_convex_polygon_jit(gt_boxes_bv.reshape(-1, 2), bounding_box)
+    ret = points_in_convex_polygon_jit(gt_boxes_bv.reshape(-1, 2), np.array(bounding_box))
     return np.any(ret.reshape(-1, 4), axis=1)
 
 

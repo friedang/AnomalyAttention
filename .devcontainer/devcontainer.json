@@ -1,0 +1,34 @@
+// For format details, see https://aka.ms/devcontainer.json. For config options, see the
+// README at: https://github.com/devcontainers/templates/tree/main/src/anaconda
+{
+  "name": "cp_baseline",
+
+  "runArgs": ["--gpus=all",
+              "--ipc=host"],
+
+  "image": "cp_plus:latest",
+
+	// "postCreateCommand": "python setup.py develop",
+	// ],
+
+  "mounts": [
+        "source=/mnt/Drive/HDD1/datasets/nuscenes/,target=/workspace/CenterPoint/data/nuScenes/,type=bind,consistency=cached",
+        "source=/mnt/Drive/HDD2/fdang/CenterPoint/work_dirs/,target=/workspace/CenterPoint/work_dirs/,type=bind,consistency=cached"
+      ],
+    
+  "remoteUser": "vscode",
+
+  "customizations": {
+        // Configure properties specific to VS Code.
+        "vscode": {
+          // Add the IDs of extensions you want installed when the container is created.
+          "extensions": [
+            "ms-python.python",
+            "tatsy.vscode-3d-preview",
+            "ms-python.isort",
+            "ms-python.flake8",
+            "ms-toolsai.jupyter"
+          ]
+        }
+  }
+}

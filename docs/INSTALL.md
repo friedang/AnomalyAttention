@@ -1,3 +1,5 @@
+Might need to change in preprocess.py
+L121 to ret = points_in_convex_polygon_jit(gt_boxes_bv.reshape(-1, 2), np.array(bounding_box))
 ## Installation
 Modified from [det3d](https://github.com/poodarchu/Det3D/tree/56402d4761a5b73acd23080f537599b0888cce07)'s original document.
 

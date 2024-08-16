@@ -1,4 +1,5 @@
-from collections import Iterable, defaultdict
+from collections.abc import Iterable
+from collections import defaultdict
 from copy import deepcopy
 from itertools import chain
 
