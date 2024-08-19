@@ -4,20 +4,21 @@ import re
 from collections import OrderedDict, defaultdict
 from functools import partial
 
-try:
-    import apex
-except:
-    print("No APEX!")
+# try:
+#     import apex
+# except:
+#     print("No APEX!")
 
 import numpy as np
 import torch
-from det3d.builder import _create_learning_rate_scheduler
+# from mmdet.core import DistEvalHook, EvalHook
 
-# from det3d.datasets.kitti.eval_hooks import KittiDistEvalmAPHook, KittiEvalmAPHookV2
+from det3d.builder import _create_learning_rate_scheduler
 from det3d.core import DistOptimizerHook
 from det3d.datasets import DATASETS, build_dataloader
 from det3d.solver.fastai_optim import OptimWrapper
 from det3d.torchie.trainer import DistSamplerSeedHook, Trainer, obj_from_dict
+from det3d.torchie.trainer.hooks.logger.wandbhook import WandbLoggerHook
 from det3d.utils.print_utils import metric_to_str
 from torch import nn
 from torch.nn.parallel import DistributedDataParallel
@@ -310,13 +311,40 @@ def train_detector(model, dataset, cfg, distributed=False, validate=False, logge
     if distributed:
         trainer.register_hook(DistSamplerSeedHook())
 
+    wandb_hook_cfg = {
+        'init_kwargs': {
+            'project': f"cp_train",
+            # 'entity': 'berlinxfriedrich',
+            # 'resume': 'must', 
+            # 'id': 'ulwwa9bd'
+        },
+        # 'interval': 10,
+        # 'ignore_last': True,
+        # 'reset_flag': False,
+        # 'commit': True,
+        # 'by_epoch': True,
+        # 'with_step': True
+    }
+    combined_hook = WandbLoggerHook(**wandb_hook_cfg)
+    trainer.register_hook(combined_hook)
+
+
     # # register eval hooks
     # if validate:
-    #     val_dataset_cfg = cfg.data.val
+    #     val_samples_per_gpu = cfg.data.val.pop('samples_per_gpu', 1)
+    #     if val_samples_per_gpu > 1:
+    #         cfg.data.val.pipeline = replace_ImageToTensor(cfg.data.val.pipeline)
+    #     val_dataset = build_dataset(cfg.data.val, dict(test_mode=True))
+    #     val_dataloader = build_dataloader(val_dataset, samples_per_gpu=val_samples_per_gpu, workers_per_gpu=cfg.data.workers_per_gpu, dist=distributed, shuffle=False)
     #     eval_cfg = cfg.get('evaluation', {})
-    #     dataset_type = DATASETS.get(val_dataset_cfg.type)
-    #     trainer.register_hook(
-    #         KittiEvalmAPHookV2(val_dataset_cfg, **eval_cfg))
+    #     eval_cfg['by_epoch'] = cfg.runner['type'] != 'IterBasedRunner'
+    #     eval_hook = DistEvalHook if distributed else EvalHook
+    #     trainer.register_hook(eval_hook(val_dataloader, **eval_cfg))
+    #     # val_dataset_cfg = cfg.data.val
+    #     # eval_cfg = cfg.get('evaluation', {})
+    #     # dataset_type = DATASETS.get(val_dataset_cfg.type)
+    #     # trainer.register_hook(
+    #     #     KittiEvalmAPHookV2(val_dataset_cfg, **eval_cfg))
 
     if cfg.resume_from:
         trainer.resume(cfg.resume_from)

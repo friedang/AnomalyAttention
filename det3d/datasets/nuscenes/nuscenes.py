@@ -4,16 +4,19 @@ import json
 import random
 import operator
 import numpy as np
+import torch
+import wandb
 
+from ipdb import set_trace
 from functools import reduce
 from pathlib import Path
 from copy import deepcopy
 
-try:
-    from nuscenes.nuscenes import NuScenes
-    from nuscenes.eval.detection.config import config_factory
-except:
-    print("nuScenes devkit not found!")
+# try:
+from nuscenes.nuscenes import NuScenes
+from nuscenes.eval.detection.config import config_factory
+# except:
+    # print("nuScenes devkit not found!")
 
 from det3d.datasets.custom import PointCloudDataset
 from det3d.datasets.nuscenes.nusc_common import (
@@ -41,11 +44,13 @@ class NuScenesDataset(PointCloudDataset):
         test_mode=False,
         version="v1.0-trainval",
         load_interval=1,
+        sample_ratio=1,
+        load_indices=None,
         **kwargs,
     ):
         self.load_interval = load_interval 
         super(NuScenesDataset, self).__init__(
-            root_path, info_path, pipeline, test_mode=test_mode, class_names=class_names
+            root_path, info_path, pipeline, test_mode=test_mode, class_names=class_names, sample_ratio=sample_ratio,
         )
 
         self.nsweeps = nsweeps
@@ -55,8 +60,7 @@ class NuScenesDataset(PointCloudDataset):
         self._info_path = info_path
         self._class_names = class_names
 
-        if not hasattr(self, "_nusc_infos"):
-            self.load_infos(self._info_path)
+        self.load_infos(self._info_path, sample_ratio, load_indices)
 
         self._num_point_features = NuScenesDataset.NumPointFeatures
         self._name_mapping = general_to_detection
@@ -73,12 +77,29 @@ class NuScenesDataset(PointCloudDataset):
         random.shuffle(self._nusc_infos_all)
         self._nusc_infos = self._nusc_infos_all[: self.frac]
 
-    def load_infos(self, info_path):
+    def load_infos(self, info_path, sample_ratio=1, load_indices=None):
 
         with open(self._info_path, "rb") as f:
             _nusc_infos_all = pickle.load(f)
 
         _nusc_infos_all = _nusc_infos_all[::self.load_interval]
+        if sample_ratio != 1:
+            if load_indices:
+                self.train_indices = torch.load(load_indices)
+                print(f"Loaded indices from {load_indices}")               
+            else:
+                print(f"Sample {sample_ratio*100}% of the dataset.")
+                torch.manual_seed(random.randint(0, sys.maxsize))
+                total_indices = torch.randperm(len(_nusc_infos_all))
+                split = int(sample_ratio * len(_nusc_infos_all)) 
+                self.train_indices = total_indices[:split]
+                self.pseudo_indices = [i for i in total_indices if i not in self.train_indices] 
+                torch.save(self.train_indices, f"/workspace/CenterPoint/work_dirs/cp_{int(sample_ratio*100)}/train_indices.pth")
+                torch.save(self.pseudo_indices, f"/workspace/CenterPoint/work_dirs/cp_{int(sample_ratio*100)}/pseudo_indices.pth")
+
+            print(f"Original length is {len(_nusc_infos_all)}")
+            _nusc_infos_all = [_nusc_infos_all[i] for i in self.train_indices]
+            print(f"New length is {len(_nusc_infos_all)}")
 
         if not self.test_mode:  # if training
             self.frac = int(len(_nusc_infos_all) * 0.25)
@@ -327,5 +348,7 @@ class NuScenesDataset(PointCloudDataset):
             }
         else:
             res = None
+
+        wandb.log(res)
 
         return res, None

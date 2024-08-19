@@ -8,6 +8,7 @@ import warnings
 warnings.simplefilter('ignore', category=NumbaDeprecationWarning)
 warnings.simplefilter('ignore', category=NumbaWarning)
 
+import ipdb
 import numpy as np
 import torch
 import yaml
@@ -40,6 +41,12 @@ def parse_args():
         default=1,
         help="number of gpus to use " "(only applicable to non-distributed training)",
     )
+    parser.add_argument(
+        '--gpu-ids',
+        type=int,
+        nargs='+',
+        help='ids of gpus to use '
+        '(only applicable to non-distributed training)')
     parser.add_argument("--seed", type=int, default=None, help="random seed")
     parser.add_argument(
         "--launcher",
@@ -139,6 +146,8 @@ def main():
         set_random_seed(args.seed)
 
     model = build_detector(cfg.model, train_cfg=cfg.train_cfg, test_cfg=cfg.test_cfg)
+    if not distributed:
+            model = model.to(torch.device(f"cuda:{args.gpu_ids[0]}"))
 
     datasets = [build_dataset(cfg.data.train)]
 
@@ -165,4 +174,8 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    # main()
+    from ipdb import launch_ipdb_on_exception
+    with launch_ipdb_on_exception():
+        main()
+

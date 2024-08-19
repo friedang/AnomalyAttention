@@ -8,15 +8,15 @@ from typing import List
 from tqdm import tqdm
 from pyquaternion import Quaternion
 
-try:
-    from nuscenes import NuScenes
-    from nuscenes.utils import splits
-    from nuscenes.utils.data_classes import Box
-    from nuscenes.utils.geometry_utils import transform_matrix
-    from nuscenes.eval.detection.config import config_factory
-    from nuscenes.eval.detection.evaluate import NuScenesEval
-except:
-    print("nuScenes devkit not Found!")
+# try:
+from nuscenes import NuScenes
+from nuscenes.utils import splits
+from nuscenes.utils.data_classes import Box
+from nuscenes.utils.geometry_utils import transform_matrix
+from nuscenes.eval.detection.config import config_factory
+from nuscenes.eval.detection.evaluate import NuScenesEval
+# except:
+#     print("nuScenes devkit not Found!")
 
 general_to_detection = {
     "human.pedestrian.adult": "pedestrian",

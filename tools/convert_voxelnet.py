@@ -7,10 +7,10 @@ import sys
 import os.path as osp
 from collections import OrderedDict
 
-try:
-    import apex
-except:
-    print("No APEX!")
+# try:
+#     import apex
+# except:
+#     print("No APEX!")
 import numpy as np
 import torch
 import yaml

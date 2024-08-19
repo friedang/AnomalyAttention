@@ -4,10 +4,10 @@ import json
 import os
 import sys
 
-try:
-    import apex
-except:
-    print("No APEX!")
+# try:
+#     import apex
+# except:
+#     print("No APEX!")
 import numpy as np
 import torch
 import yaml
@@ -28,6 +28,7 @@ from det3d.torchie.trainer.utils import all_gather, synchronize
 from torch.nn.parallel import DistributedDataParallel
 import pickle 
 import time 
+import wandb
 
 def save_pred(pred, root):
     with open(os.path.join(root, "prediction.pkl"), "wb") as f:
@@ -85,6 +86,8 @@ def main():
     # update configs according to CLI args
     if args.work_dir is not None:
         cfg.work_dir = args.work_dir
+
+    wandb.init(project=f"val_{10}")
 
     distributed = False
     if "WORLD_SIZE" in os.environ:
@@ -197,6 +200,11 @@ def main():
         os.makedirs(args.work_dir)
 
     save_pred(predictions, args.work_dir)
+
+    # todo add load arg
+    # with open(f"{args.work_dir}/prediction.pkl", 'rb') as f:
+    #     predictions = pickle.load(f)
+
 
     result_dict, _ = dataset.evaluation(copy.deepcopy(predictions), output_dir=args.work_dir, testset=args.testset)
 

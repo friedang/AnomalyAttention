@@ -35,3 +35,4 @@ spconv-cu117==2.3.6
 transforms3d==0.4.1
 screeninfo==0.8.1
 wandb
+ipdb

@@ -178,6 +178,8 @@ data = dict(
         nsweeps=nsweeps,
         class_names=class_names,
         pipeline=train_pipeline,
+        load_interval=None,
+        sample_ratio=0.05,
     ),
     val=dict(
         type=dataset_type,
@@ -224,7 +226,8 @@ log_config = dict(
 # yapf:enable
 # runtime settings
 total_epochs = 20
-device_ids = range(8)
+evaluation = dict(interval=5)
+device_ids = range(2)
 dist_params = dict(backend="nccl", init_method="env://")
 log_level = "INFO"
 work_dir = './work_dirs/{}/'.format(__file__[__file__.rfind('/') + 1:-3])
