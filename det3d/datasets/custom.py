@@ -37,7 +37,7 @@ class PointCloudDataset(Dataset):
 
         self.test_mode = test_mode
 
-        self._set_group_flag()
+        # self._set_group_flag()
 
         if pipeline is None:
             self.pipeline = None
@@ -164,16 +164,11 @@ class PointCloudDataset(Dataset):
         Images with aspect ratio greater than 1 will be set as group 1,
         otherwise group 0.
         """
-        if self.sample_ratio != 1:
-            split = int(self.sample_ratio * len(self)) 
-            self.flag = np.ones(split, dtype=np.uint8)
-        else:
-            self.flag = np.ones(len(self), dtype=np.uint8)
-        # self.flag = np.zeros(len(self), dtype=np.uint8)
-        # for i in range(len(self)):
-        #     img_info = self.img_infos[i]
-        #     if img_info['width'] / img_info['height'] > 1:
-        #         self.flag[i] = 1
+        self.flag = np.zeros(len(self), dtype=np.uint8)
+        for i in range(len(self)):
+            img_info = self.img_infos[i]
+            if img_info['width'] / img_info['height'] > 1:
+                self.flag[i] = 1
 
     def prepare_train_input(self, idx):
         raise NotImplementedError

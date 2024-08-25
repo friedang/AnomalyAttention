@@ -17,6 +17,14 @@ class WandbLoggerHook(LoggerHook):
         self.init_kwargs = init_kwargs
         self.commit = commit
         self.with_step = with_step
+        self.classes = [
+            'car',
+            'truck_constructionvehicle',
+            'bus_trailer',
+            'barrier',
+            'motorcycle_bicycle',
+            'pedestrian_trafficcone',
+        ]
 
     def import_wandb(self):
         try:
@@ -39,6 +47,14 @@ class WandbLoggerHook(LoggerHook):
     @master_only
     def log(self, runner):
         tags = runner.log_buffer.output.copy()
+        
+        for l in ['loss', 'hm_loss', 'loc_loss']:
+            for i, c in enumerate(self.classes):
+                tags[f"{l}_{c}"] = tags[f"{l}"][i]
+            del tags[f"{l}"]
+        
+        del tags['num_positive']
+        del tags['loc_loss_elem']
         self.wandb.log(tags, commit=self.commit)
         # if tags:
         #     if self.with_step:

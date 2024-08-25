@@ -3,6 +3,7 @@ import pickle
 import json
 import random
 import operator
+import matplotlib.pyplot as plt
 import numpy as np
 import torch
 import wandb
@@ -15,6 +16,7 @@ from copy import deepcopy
 # try:
 from nuscenes.nuscenes import NuScenes
 from nuscenes.eval.detection.config import config_factory
+from nuscenes.utils.splits import create_splits_scenes
 # except:
     # print("nuScenes devkit not found!")
 
@@ -61,6 +63,7 @@ class NuScenesDataset(PointCloudDataset):
         self._class_names = class_names
 
         self.load_infos(self._info_path, sample_ratio, load_indices)
+        self.flag = np.ones(len(self), dtype=np.uint8)
 
         self._num_point_features = NuScenesDataset.NumPointFeatures
         self._name_mapping = general_to_detection
@@ -76,6 +79,28 @@ class NuScenesDataset(PointCloudDataset):
         self.logger.info(f"re-sample {self.frac} frames from full set")
         random.shuffle(self._nusc_infos_all)
         self._nusc_infos = self._nusc_infos_all[: self.frac]
+    
+    def map_timestamps_to_sequences(self, nusc, train_scenes, timestamps):
+        timestamp_to_sequence = {}
+
+        for scene in nusc.scene:
+            if scene['name'] not in train_scenes:
+                continue
+            timestamp_to_sequence[scene['name']] = []
+            # Get first and last sample tokens
+            first_sample_token = scene['first_sample_token']
+            last_sample_token = scene['last_sample_token']
+            
+            # Get start and end timestamps from the first and last samples
+            start_time = nusc.get('sample', first_sample_token)['timestamp']
+            end_time = nusc.get('sample', last_sample_token)['timestamp']
+            
+            # Map the provided timestamps to the scene (sequence)
+            for timestamp in timestamps:
+                if start_time <= float(str(timestamp).replace('.','')) <= end_time:
+                    timestamp_to_sequence[scene['name']] += [timestamp]
+        
+        return timestamp_to_sequence
 
     def load_infos(self, info_path, sample_ratio=1, load_indices=None):
 
@@ -83,23 +108,35 @@ class NuScenesDataset(PointCloudDataset):
             _nusc_infos_all = pickle.load(f)
 
         _nusc_infos_all = _nusc_infos_all[::self.load_interval]
+
         if sample_ratio != 1:
+            ts_all = [_nusc_infos_all[i]['timestamp'] for i in range(len(_nusc_infos_all))]
+            nusc = NuScenes(version='v1.0-trainval', dataroot=str(self._root_path), verbose=True)
+            train_scenes = create_splits_scenes()['train']
+            timestamp_to_sequence = self.map_timestamps_to_sequences(nusc, train_scenes, ts_all)
+            train_scene_names = list(timestamp_to_sequence.keys())
+
             if load_indices:
                 self.train_indices = torch.load(load_indices)
                 print(f"Loaded indices from {load_indices}")               
             else:
                 print(f"Sample {sample_ratio*100}% of the dataset.")
                 torch.manual_seed(random.randint(0, sys.maxsize))
-                total_indices = torch.randperm(len(_nusc_infos_all))
-                split = int(sample_ratio * len(_nusc_infos_all)) 
-                self.train_indices = total_indices[:split]
-                self.pseudo_indices = [i for i in total_indices if i not in self.train_indices] 
+                total_indices = torch.randperm(len(train_scene_names))
+                split = int(sample_ratio * len(train_scene_names))
+                train_scene_names = [x for _, x in sorted(zip(total_indices, train_scene_names))]
+                self.train_indices = train_scene_names[:split]
+                self.pseudo_indices = train_scene_names[split:]
                 torch.save(self.train_indices, f"/workspace/CenterPoint/work_dirs/cp_{int(sample_ratio*100)}/train_indices.pth")
                 torch.save(self.pseudo_indices, f"/workspace/CenterPoint/work_dirs/cp_{int(sample_ratio*100)}/pseudo_indices.pth")
 
-            print(f"Original length is {len(_nusc_infos_all)}")
-            _nusc_infos_all = [_nusc_infos_all[i] for i in self.train_indices]
-            print(f"New length is {len(_nusc_infos_all)}")
+            print(f"Original # of Frames is {len(_nusc_infos_all)}")
+            print(f"Original # of Scenes is {len(train_scenes)}")
+            scenes = {k: v for k, v in timestamp_to_sequence.items() if k in self.train_indices}
+            timestamps = [t for ts in scenes.values() for t in ts]
+            _nusc_infos_all = [i for i in _nusc_infos_all if i['timestamp'] in timestamps]
+            print(f"New # of Frames is {len(_nusc_infos_all)}")
+            print(f"New # of Scenes is {len(self.train_indices)}")
 
         if not self.test_mode:  # if training
             self.frac = int(len(_nusc_infos_all) * 0.25)
@@ -210,8 +247,57 @@ class NuScenesDataset(PointCloudDataset):
     def __getitem__(self, idx):
         return self.get_sensor_data(idx)
 
+    def plot_prc(self, output_dir):
+        detailed_results_path = output_dir + '/metrics_details.json'
+        with open(detailed_results_path, 'r') as f:
+            detailed_results = json.load(f)
+        objects = detailed_results.keys()
+        classes = []
+        for obj in objects:
+            if obj[:-4] not in classes:
+                classes.append(obj[:-4])
+
+        colors = [
+            "#FF5733",  # Red
+            "#33FF57",  # Green
+            "#3357FF",  # Blue
+            "#33FFFF",  # Cyan
+            "#FF33FF",  # Magenta
+            "#FFFF33",  # Yellow
+            ]
+
+        for c in classes:
+            # Filter objects by class
+            obj_by_c = [obj for obj in objects if c in obj]
+
+            # Create a new figure for this class
+            plt.figure(figsize=(8, 6))
+
+            # Loop over each subclass object and plot the PR curve with different colors
+            for idx, o in enumerate(obj_by_c):
+                car_pr_curve = detailed_results[o]
+                set_trace()
+                recalls = car_pr_curve['recall']  # List of recall values
+                precisions = car_pr_curve['precision']  # List of precision values
+
+                # Plot the curve with a different color and marker
+                plt.plot(recalls, precisions, label=o, marker='o', linestyle='-', color=colors[idx])
+
+            # Customize and save the plot
+            plt.title(f'Precision-Recall Curve for {c} Class')
+            plt.xlabel('Recall')
+            plt.ylabel('Precision')
+            plt.grid(True)
+            plt.xlim([0, 1])
+            plt.ylim([0, 1])
+            plt.legend(title='Subclasses')  # Legend with a title
+            plt.savefig(f"{detailed_results_path.replace('metrics_details.json', 'PR-'+c)}.png")
+
+            # Close the figure to avoid memory issues
+            plt.close()
+
+
     def evaluation(self, detections, output_dir=None, testset=False):
-        version = self.version
         eval_set_map = {
             "v1.0-mini": "mini_val",
             "v1.0-trainval": "val",
@@ -240,7 +326,7 @@ class NuScenesDataset(PointCloudDataset):
             "meta": None,
         }
 
-        nusc = NuScenes(version=version, dataroot=str(self._root_path), verbose=True)
+        nusc = NuScenes(version=self.version, dataroot=str(self._root_path), verbose=True)
 
         mapped_class_names = []
         for n in self._class_names:
@@ -321,7 +407,7 @@ class NuScenesDataset(PointCloudDataset):
                 metrics = json.load(f)
 
             detail = {}
-            result = f"Nusc {version} Evaluation\n"
+            result = f"Nusc {self.version} Evaluation\n"
             for name in mapped_class_names:
                 detail[name] = {}
                 for k, v in metrics["label_aps"][name].items():
@@ -338,6 +424,7 @@ class NuScenesDataset(PointCloudDataset):
                 "results": {"nusc": result},
                 "detail": {"nusc": detail},
             }
+            self.plot_prc(output_dir)
         else:
             res_nusc = None
 

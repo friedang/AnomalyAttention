@@ -63,6 +63,7 @@ def parse_args():
     parser.add_argument("--speed_test", action="store_true")
     parser.add_argument("--local_rank", type=int, default=0)
     parser.add_argument("--testset", action="store_true")
+    parser.add_argument("--load-preds", default=False, action="store_true")
 
     args = parser.parse_args()
     if "LOCAL_RANK" not in os.environ:
@@ -114,6 +115,17 @@ def main():
     else:
         print("Use Val Set")
         dataset = build_dataset(cfg.data.val)
+
+    if args.load_preds:
+        print(f"Loading predictions from {args.work_dir}/prediction.pkl")
+        with open(f"{args.work_dir}/prediction.pkl", 'rb') as f:
+            predictions = pickle.load(f)
+
+        result_dict, _ = dataset.evaluation(copy.deepcopy(predictions), output_dir=args.work_dir, testset=args.testset)
+        if result_dict is not None:
+            for k, v in result_dict["results"].items():
+                print(f"Evaluation {k}: {v}")
+        return
 
     data_loader = build_dataloader(
         dataset,
@@ -200,11 +212,6 @@ def main():
         os.makedirs(args.work_dir)
 
     save_pred(predictions, args.work_dir)
-
-    # todo add load arg
-    # with open(f"{args.work_dir}/prediction.pkl", 'rb') as f:
-    #     predictions = pickle.load(f)
-
 
     result_dict, _ = dataset.evaluation(copy.deepcopy(predictions), output_dir=args.work_dir, testset=args.testset)
 
