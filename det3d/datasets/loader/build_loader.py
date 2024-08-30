@@ -42,7 +42,6 @@ def build_dataloader(
         batch_size = num_gpus * batch_size
         num_workers = num_gpus * workers_per_gpu
 
-    # TODO change pin_memory
     data_loader = DataLoader(
         dataset,
         batch_size=batch_size,
@@ -50,8 +49,9 @@ def build_dataloader(
         shuffle=(sampler is None),
         num_workers=num_workers,
         collate_fn=collate_kitti,
-        # pin_memory=True,
-        pin_memory=False,
+        # pin_memory=False,
+        pin_memory=True,
+        prefetch_factor=2,
     )
 
     return data_loader

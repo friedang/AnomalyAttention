@@ -54,7 +54,7 @@ def parse_args():
         default="pytorch",
         help="job launcher",
     )
-    parser.add_argument("--local_rank", type=int, default=0)
+    parser.add_argument("--local-rank", type=int, default=0)
     parser.add_argument(
         "--autoscale-lr",
         action="store_true",
@@ -174,8 +174,8 @@ def main():
 
 
 if __name__ == "__main__":
-    # main()
-    from ipdb import launch_ipdb_on_exception
-    with launch_ipdb_on_exception():
-        main()
+    main()
+    # from ipdb import launch_ipdb_on_exception, set_trace
+    # with launch_ipdb_on_exception():
+    #     main()
 

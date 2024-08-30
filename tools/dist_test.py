@@ -2,6 +2,8 @@ import argparse
 import copy
 import json
 import os
+from os import path as osp
+import shutil
 import sys
 
 # try:
@@ -23,6 +25,7 @@ from det3d.torchie.apis import (
     set_random_seed,
     train_detector,
 )
+from ipdb import set_trace
 from det3d.torchie.trainer import get_dist_info, load_checkpoint
 from det3d.torchie.trainer.utils import all_gather, synchronize
 from torch.nn.parallel import DistributedDataParallel
@@ -31,7 +34,13 @@ import time
 import wandb
 
 def save_pred(pred, root):
-    with open(os.path.join(root, "prediction.pkl"), "wb") as f:
+    counter = 1
+    pklfile_prefix = os.path.join(root, "prediction")
+    while osp.exists(pklfile_prefix + '.pkl'):
+        counter += 1
+    
+    result_path = f"{pklfile_prefix}_{counter}.pkl"
+    with open(result_path, "wb") as f:
         pickle.dump(pred, f)
 
 
@@ -61,9 +70,11 @@ def parse_args():
         help="job launcher",
     )
     parser.add_argument("--speed_test", action="store_true")
-    parser.add_argument("--local_rank", type=int, default=0)
+    parser.add_argument("--local-rank", type=int, default=0)
+    parser.add_argument("--pred-suffix", type=str, default='1')
     parser.add_argument("--testset", action="store_true")
     parser.add_argument("--load-preds", default=False, action="store_true")
+    parser.add_argument("--pseudo-train", default=False, action="store_true")
 
     args = parser.parse_args()
     if "LOCAL_RANK" not in os.environ:
@@ -87,8 +98,13 @@ def main():
     # update configs according to CLI args
     if args.work_dir is not None:
         cfg.work_dir = args.work_dir
+    
+    # dump config
+    # if not os.path.exists(osp.join(cfg.work_dir)):
+    #     os.makedirs(osp.join(cfg.work_dir), exist_ok=True)
+    # shutil.copy('/workspace/CenterPoint/configs/nusc/voxelnet/nusc_centerpoint_voxelnet_0075voxel_fix_bn_z.py', osp.join(cfg.work_dir, 'test_' + osp.basename(args.config)))
 
-    wandb.init(project=f"val_{10}")
+    wandb.init(project=cfg.project_name)
 
     distributed = False
     if "WORLD_SIZE" in os.environ:
@@ -117,11 +133,11 @@ def main():
         dataset = build_dataset(cfg.data.val)
 
     if args.load_preds:
-        print(f"Loading predictions from {args.work_dir}/prediction.pkl")
-        with open(f"{args.work_dir}/prediction.pkl", 'rb') as f:
+        print(f"Loading predictions from {args.work_dir}/prediction_{args.pred_suffix}.pkl")
+        with open(f"{args.work_dir}/prediction_{args.pred_suffix}.pkl", 'rb') as f:
             predictions = pickle.load(f)
 
-        result_dict, _ = dataset.evaluation(copy.deepcopy(predictions), output_dir=args.work_dir, testset=args.testset)
+        result_dict, _ = dataset.evaluation(copy.deepcopy(predictions), output_dir=args.work_dir, testset=args.testset, train=args.pseudo_train)
         if result_dict is not None:
             for k, v in result_dict["results"].items():
                 print(f"Evaluation {k}: {v}")
@@ -133,13 +149,15 @@ def main():
         workers_per_gpu=cfg.data.workers_per_gpu,
         dist=distributed,
         shuffle=False,
+        pin_memory=True,
+        prefetch_factor=2,
     )
 
     checkpoint = load_checkpoint(model, args.checkpoint, map_location="cpu")
 
     # put model on gpus
     if distributed:
-        model = apex.parallel.convert_syncbn_model(model)
+        # model = apex.parallel.convert_syncbn_model(model)
         model = DistributedDataParallel(
             model.cuda(cfg.local_rank),
             device_ids=[cfg.local_rank],
@@ -213,7 +231,7 @@ def main():
 
     save_pred(predictions, args.work_dir)
 
-    result_dict, _ = dataset.evaluation(copy.deepcopy(predictions), output_dir=args.work_dir, testset=args.testset)
+    result_dict, _ = dataset.evaluation(copy.deepcopy(predictions), output_dir=args.work_dir, testset=args.testset, train=args.pseudo_train)
 
     if result_dict is not None:
         for k, v in result_dict["results"].items():
@@ -223,4 +241,7 @@ def main():
         assert False, "No longer support kitti"
 
 if __name__ == "__main__":
-    main()
+    # main()
+    from ipdb import launch_ipdb_on_exception, set_trace
+    with launch_ipdb_on_exception():
+        main()

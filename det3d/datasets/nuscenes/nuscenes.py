@@ -5,6 +5,7 @@ import random
 import operator
 import matplotlib.pyplot as plt
 import numpy as np
+import os
 import torch
 import wandb
 
@@ -102,6 +103,36 @@ class NuScenesDataset(PointCloudDataset):
         
         return timestamp_to_sequence
 
+    def get_class_distribution(self, nusc, scene_names, classes):
+        from collections import Counter
+        import tqdm
+        class_counter = Counter()
+
+        for scene in tqdm.tqdm(nusc.scene):
+            if scene['name'] not in scene_names:
+                continue
+
+            sample = nusc.get('sample', scene['first_sample_token'])
+            while sample:
+                for ann_token in sample['anns']:
+                    ann = nusc.get('sample_annotation', ann_token)
+                    if any([c for c in classes if c in ann['category_name']]):
+                        class_counter[ann['category_name']] += 1
+                
+                if sample['next'] == '':
+                    break
+                sample = nusc.get('sample', sample['next'])
+
+        dis = {}
+        dis_cat_names = dict(class_counter)
+
+        for c in classes:
+            dis[c] = 0
+            vals = {k: v for k,v in dis_cat_names.items() if c in k}
+            dis[c] += np.sum(list(vals.values()))
+
+        return dis
+
     def load_infos(self, info_path, sample_ratio=1, load_indices=None):
 
         with open(self._info_path, "rb") as f:
@@ -109,7 +140,7 @@ class NuScenesDataset(PointCloudDataset):
 
         _nusc_infos_all = _nusc_infos_all[::self.load_interval]
 
-        if sample_ratio != 1:
+        if sample_ratio != 1 or load_indices != None:
             ts_all = [_nusc_infos_all[i]['timestamp'] for i in range(len(_nusc_infos_all))]
             nusc = NuScenes(version='v1.0-trainval', dataroot=str(self._root_path), verbose=True)
             train_scenes = create_splits_scenes()['train']
@@ -118,7 +149,7 @@ class NuScenesDataset(PointCloudDataset):
 
             if load_indices:
                 self.train_indices = torch.load(load_indices)
-                print(f"Loaded indices from {load_indices}")               
+                print(f"Loaded indices from {load_indices}")         
             else:
                 print(f"Sample {sample_ratio*100}% of the dataset.")
                 torch.manual_seed(random.randint(0, sys.maxsize))
@@ -127,8 +158,17 @@ class NuScenesDataset(PointCloudDataset):
                 train_scene_names = [x for _, x in sorted(zip(total_indices, train_scene_names))]
                 self.train_indices = train_scene_names[:split]
                 self.pseudo_indices = train_scene_names[split:]
-                torch.save(self.train_indices, f"/workspace/CenterPoint/work_dirs/cp_{int(sample_ratio*100)}/train_indices.pth")
-                torch.save(self.pseudo_indices, f"/workspace/CenterPoint/work_dirs/cp_{int(sample_ratio*100)}/pseudo_indices.pth")
+                
+                save_path = f"/workspace/CenterPoint/work_dirs/cp_{int(sample_ratio*100)}"
+                if not os.path.isdir(save_path):
+                    os.mkdir(save_path)
+                torch.save(self.train_indices, f"{save_path}/train_indices.pth")
+                torch.save(self.pseudo_indices, f"{save_path}/pseudo_indices.pth")
+            
+            classes = ["car", "truck", "bus", "trailer", "vehicle.construction", "pedestrian",
+                       "motorcycle", "bicycle", "trafficcone", "barrier"]
+            class_distribution = self.get_class_distribution(nusc, self.train_indices, classes)
+            print(class_distribution) 
 
             print(f"Original # of Frames is {len(_nusc_infos_all)}")
             print(f"Original # of Scenes is {len(train_scenes)}")
@@ -247,7 +287,7 @@ class NuScenesDataset(PointCloudDataset):
     def __getitem__(self, idx):
         return self.get_sensor_data(idx)
 
-    def plot_prc(self, output_dir):
+    def plot_results(self, output_dir, x, y):
         detailed_results_path = output_dir + '/metrics_details.json'
         with open(detailed_results_path, 'r') as f:
             detailed_results = json.load(f)
@@ -275,32 +315,31 @@ class NuScenesDataset(PointCloudDataset):
 
             # Loop over each subclass object and plot the PR curve with different colors
             for idx, o in enumerate(obj_by_c):
-                car_pr_curve = detailed_results[o]
-                set_trace()
-                recalls = car_pr_curve['recall']  # List of recall values
-                precisions = car_pr_curve['precision']  # List of precision values
+                obj_results = detailed_results[o]
 
-                # Plot the curve with a different color and marker
-                plt.plot(recalls, precisions, label=o, marker='o', linestyle='-', color=colors[idx])
+                x_quantity = obj_results[f"{x}"]
+                y_quantity = obj_results[f"{y}"]
 
-            # Customize and save the plot
-            plt.title(f'Precision-Recall Curve for {c} Class')
-            plt.xlabel('Recall')
-            plt.ylabel('Precision')
+                plt.plot(x_quantity, y_quantity, label=o, marker='o', linestyle='-', color=colors[idx])
+
+            plt.title(f'{y}-{x} curve for {c} class')
+            plt.xlabel(f'{x}')
+            plt.ylabel(f'{y}')
             plt.grid(True)
-            plt.xlim([0, 1])
+            if x == 'confidence':
+                plt.xlim([1, 0])
+            else:
+                plt.xlim([0, 1])
             plt.ylim([0, 1])
-            plt.legend(title='Subclasses')  # Legend with a title
-            plt.savefig(f"{detailed_results_path.replace('metrics_details.json', 'PR-'+c)}.png")
-
-            # Close the figure to avoid memory issues
+            plt.legend(title='Subclasses')
+            plt.savefig(f"{detailed_results_path.replace('metrics_details.json', 'plots/' + y + '-' + x + '_' + c)}.png")
             plt.close()
 
 
-    def evaluation(self, detections, output_dir=None, testset=False):
+    def evaluation(self, detections, output_dir=None, testset=False, train=False):
         eval_set_map = {
             "v1.0-mini": "mini_val",
-            "v1.0-trainval": "val",
+            "v1.0-trainval": "train" if train else "val", # TODO use "train"
             "v1.0-test": "test",
         }
 
@@ -424,7 +463,8 @@ class NuScenesDataset(PointCloudDataset):
                 "results": {"nusc": result},
                 "detail": {"nusc": detail},
             }
-            self.plot_prc(output_dir)
+            self.plot_results(output_dir, 'confidence', 'precision')
+            self.plot_results(output_dir, 'confidence', 'recall')
         else:
             res_nusc = None
 
@@ -436,6 +476,9 @@ class NuScenesDataset(PointCloudDataset):
         else:
             res = None
 
-        wandb.log(res)
+        log_out = {k: np.mean(list(v.values()))
+            for k,v in res['detail']['eval.nusc'].items()
+        }
+        wandb.log(log_out)
 
         return res, None

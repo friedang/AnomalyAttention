@@ -265,8 +265,8 @@ def train_detector(model, dataset, cfg, distributed=False, validate=False, logge
 
     total_steps = cfg.total_epochs * len(data_loaders[0])
     # print(f"total_steps: {total_steps}")
-    if distributed:
-        model = apex.parallel.convert_syncbn_model(model)
+    # if distributed:
+    #     model = apex.parallel.convert_syncbn_model(model)
     if cfg.lr_config.type == "one_cycle":
         # build trainer
         optimizer = build_one_cycle_optimizer(model, cfg.optimizer)
@@ -286,8 +286,8 @@ def train_detector(model, dataset, cfg, distributed=False, validate=False, logge
             model.cuda(cfg.local_rank),
             device_ids=[cfg.local_rank],
             output_device=cfg.local_rank,
-            # broadcast_buffers=False,
-            find_unused_parameters=True,
+            broadcast_buffers=False,
+            find_unused_parameters=False,
         )
     else:
         model = model.cuda()
@@ -313,7 +313,7 @@ def train_detector(model, dataset, cfg, distributed=False, validate=False, logge
 
     wandb_hook_cfg = {
         'init_kwargs': {
-            'project': f"cp_train",
+            'project': cfg.project_name,
             # 'entity': 'berlinxfriedrich',
             # 'resume': 'must', 
             # 'id': 'ulwwa9bd'
@@ -351,4 +351,5 @@ def train_detector(model, dataset, cfg, distributed=False, validate=False, logge
     elif cfg.load_from:
         trainer.load_checkpoint(cfg.load_from)
 
+    # torch.cuda.empty_cache()
     trainer.run(data_loaders, cfg.workflow, cfg.total_epochs, local_rank=cfg.local_rank)
