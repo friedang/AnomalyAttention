@@ -76,7 +76,7 @@ test_cfg = dict(
         nms_post_max_size=83,
         nms_iou_threshold=0.2,
     ),
-    score_threshold=0.3, # [0.2, 0.3, 0.3, 0.3, 0.3, 0.3, 0.4, 0.4, 0.3, 0.3], # 0.1,
+    score_threshold=0.1,
     pc_range=[-54, -54],
     out_size_factor=get_downsample_factor(model),
     voxel_size=[0.075, 0.075]
@@ -163,15 +163,9 @@ test_pipeline = [
     dict(type="Reformat"),
 ]
 
-project_name="cp_5seed"
-train_anno = "data/nuScenes/infos_train_10sweeps_withvelo_filter_True.pkl"
+train_anno = "work_dirs/10_nusc_centerpoint_voxelnet_0075voxel_fix_bn_z/train_gt_and_pseudo_gt.pkl" # "data/nuScenes/infos_train_10sweeps_withvelo_filter_True.pkl"
 val_anno = "data/nuScenes/infos_val_10sweeps_withvelo_filter_True.pkl"
-# pseudo_anno = "/workspace/CenterPoint/work_dirs/10_nusc_centerpoint_voxelnet_0075voxel_fix_bn_z/gt_for_pseudo.pkl"
 test_anno = None
-sample_ratio=0.05
-load_indices='/workspace/CenterPoint/work_dirs/5_nusc_centerpoint_voxelnet_0075voxel_fix_bn_z/train_indices.pth'
-pseudo_indices='/workspace/CenterPoint/work_dirs/5_nusc_centerpoint_voxelnet_0075voxel_fix_bn_z/pseudo_indices.pth'
-work_dir ='./work_dirs/5_{}/'.format(__file__[__file__.rfind('/') + 1:-3])
 
 data = dict(
     samples_per_gpu=14,
@@ -185,31 +179,17 @@ data = dict(
         class_names=class_names,
         pipeline=train_pipeline,
         load_interval=None,
-        load_indices=load_indices,
-        sample_ratio=sample_ratio,
+        # sample_ratio=0.05,
     ),
-    # val=dict(
-    #     type=dataset_type,
-    #     root_path=data_root,
-    #     info_path=val_anno,
-    #     test_mode=True,
-    #     ann_file=val_anno,
-    #     nsweeps=nsweeps,
-    #     class_names=class_names,
-    #     pipeline=test_pipeline,
-    # ),
-    # pseudo
     val=dict(
         type=dataset_type,
         root_path=data_root,
-        info_path=train_anno,
-        ann_file=train_anno,
+        info_path=val_anno,
         test_mode=True,
+        ann_file=val_anno,
         nsweeps=nsweeps,
         class_names=class_names,
         pipeline=test_pipeline,
-        load_indices=pseudo_indices,
-        sample_ratio=sample_ratio
     ),
     test=dict(
         type=dataset_type,
@@ -240,7 +220,6 @@ log_config = dict(
     interval=5,
     hooks=[
         dict(type="TextLoggerHook"),
-        dict(type="EmptyCacheHook"),
         # dict(type='TensorboardLoggerHook')
     ],
 )
@@ -251,10 +230,10 @@ evaluation = dict(interval=5)
 device_ids = range(2)
 dist_params = dict(backend="nccl", init_method="env://")
 log_level = "INFO"
-load_from = None
+work_dir = './work_dirs/{}/'.format(__file__[__file__.rfind('/') + 1:-3])
+load_from = None # './work_dirs/10_nusc_centerpoint_voxelnet_0075voxel_fix_bn_z/latest.pth'
 resume_from = None 
 workflow = [('train', 1)]
-
 
 import os
 import shutil

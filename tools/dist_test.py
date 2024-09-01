@@ -69,7 +69,7 @@ def parse_args():
         default="none",
         help="job launcher",
     )
-    parser.add_argument("--speed_test", action="store_true")
+    parser.add_argument("--speed-test", action="store_true")
     parser.add_argument("--local-rank", type=int, default=0)
     parser.add_argument("--pred-suffix", type=str, default='1')
     parser.add_argument("--testset", action="store_true")
@@ -150,7 +150,7 @@ def main():
         dist=distributed,
         shuffle=False,
         pin_memory=True,
-        prefetch_factor=2,
+        prefetch_factor=8,
     )
 
     checkpoint = load_checkpoint(model, args.checkpoint, map_location="cpu")
@@ -162,8 +162,8 @@ def main():
             model.cuda(cfg.local_rank),
             device_ids=[cfg.local_rank],
             output_device=cfg.local_rank,
-            # broadcast_buffers=False,
-            find_unused_parameters=True,
+            broadcast_buffers=False,
+            find_unused_parameters=False,
         )
     else:
         # model = fuse_bn_recursively(model)

@@ -51,7 +51,7 @@ def build_dataloader(
         collate_fn=collate_kitti,
         # pin_memory=False,
         pin_memory=True,
-        prefetch_factor=2,
+        prefetch_factor=8,
     )
 
     return data_loader

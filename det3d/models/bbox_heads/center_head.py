@@ -10,6 +10,7 @@ from collections import defaultdict
 from det3d.core import box_torch_ops
 import torch
 from det3d.torchie.cnn import kaiming_init
+import numpy as np 
 from torch import double, nn
 from det3d.models.losses.centernet_loss import FastFocalLoss, RegLoss
 from det3d.models.utils import Sequential
@@ -458,7 +459,7 @@ class CenterHead(nn.Module):
 
             scores, labels = torch.max(hm_preds, dim=-1)
 
-            score_mask = scores > test_cfg.score_threshold
+            score_mask = scores > torch.tensor(test_cfg.score_threshold)
             distance_mask = (box_preds[..., :3] >= post_center_range[:3]).all(1) \
                 & (box_preds[..., :3] <= post_center_range[3:]).all(1)
 
@@ -494,7 +495,7 @@ class CenterHead(nn.Module):
 
         return prediction_dicts 
 
-import numpy as np 
+
 def _circle_nms(boxes, min_radius, post_max_size=83):
     """
     NMS according to center distance

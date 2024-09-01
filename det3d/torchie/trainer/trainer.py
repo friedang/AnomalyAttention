@@ -7,7 +7,7 @@ import time
 from collections import OrderedDict
 
 import torch
-# import torch.cuda.amp as amp
+import torch.cuda.amp as amp
 from det3d import torchie
 
 from . import hooks
@@ -154,7 +154,6 @@ class Trainer(object):
         self.model = model
         self.optimizer = optimizer
         self.lr_scheduler = lr_scheduler
-
         self.batch_processor = batch_processor
 
         # Create work_dir
@@ -365,7 +364,8 @@ class Trainer(object):
         self.call_hook("after_data_to_device")
 
         if train_mode:
-            losses = model(example, return_loss=True)
+            with amp.autocast():
+                losses = model(example, return_loss=True)
             self.call_hook("after_forward")
             loss, log_vars = parse_second_losses(losses)
             del losses
@@ -377,7 +377,8 @@ class Trainer(object):
 
             return outputs
         else:
-            return model(example, return_loss=False)
+            with amp.autocast():
+                return model(example, return_loss=False)
 
     def train(self, data_loader, epoch, **kwargs):
 
