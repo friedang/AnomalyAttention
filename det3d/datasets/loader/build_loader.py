@@ -50,8 +50,8 @@ def build_dataloader(
         num_workers=num_workers,
         collate_fn=collate_kitti,
         # pin_memory=False,
-        pin_memory=True,
-        prefetch_factor=8,
+        # pin_memory=True,
+        # prefetch_factor=2,
     )
 
     return data_loader

@@ -339,7 +339,7 @@ class NuScenesDataset(PointCloudDataset):
     def evaluation(self, detections, output_dir=None, testset=False, train=False):
         eval_set_map = {
             "v1.0-mini": "mini_val",
-            "v1.0-trainval": "train" if train else "val", # TODO use "train"
+            "v1.0-trainval": "train" if train else "val",
             "v1.0-test": "test",
         }
 

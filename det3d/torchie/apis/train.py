@@ -282,6 +282,7 @@ def train_detector(model, dataset, cfg, distributed=False, validate=False, logge
 
     # put model on gpus
     if distributed:
+        torch.cuda.set_device(cfg.local_rank)
         model = DistributedDataParallel(
             model.cuda(cfg.local_rank),
             device_ids=[cfg.local_rank],

@@ -71,7 +71,7 @@ def parse_args():
     )
     parser.add_argument("--speed-test", action="store_true")
     parser.add_argument("--local-rank", type=int, default=0)
-    parser.add_argument("--pred-suffix", type=str, default='1')
+    parser.add_argument("--out-suffix", type=str, default='1')
     parser.add_argument("--testset", action="store_true")
     parser.add_argument("--load-preds", default=False, action="store_true")
     parser.add_argument("--pseudo-train", default=False, action="store_true")
@@ -93,7 +93,7 @@ def main():
     args = parse_args()
 
     cfg = Config.fromfile(args.config)
-    cfg.local_rank = args.local_rank
+    cfg.local_rank = int(os.environ["LOCAL_RANK"])
 
     # update configs according to CLI args
     if args.work_dir is not None:
@@ -104,14 +104,14 @@ def main():
     #     os.makedirs(osp.join(cfg.work_dir), exist_ok=True)
     # shutil.copy('/workspace/CenterPoint/configs/nusc/voxelnet/nusc_centerpoint_voxelnet_0075voxel_fix_bn_z.py', osp.join(cfg.work_dir, 'test_' + osp.basename(args.config)))
 
-    wandb.init(project=cfg.project_name)
+    wandb.init("cp_5seed95pseudo") # project=cfg.project_name)
 
     distributed = False
     if "WORLD_SIZE" in os.environ:
         distributed = int(os.environ["WORLD_SIZE"]) > 1
 
     if distributed:
-        torch.cuda.set_device(args.local_rank)
+        torch.cuda.set_device(cfg.local_rank)
         torch.distributed.init_process_group(backend="nccl", init_method="env://")
 
         cfg.gpus = torch.distributed.get_world_size()
@@ -133,9 +133,10 @@ def main():
         dataset = build_dataset(cfg.data.val)
 
     if args.load_preds:
-        print(f"Loading predictions from {args.work_dir}/prediction_{args.pred_suffix}.pkl")
-        with open(f"{args.work_dir}/prediction_{args.pred_suffix}.pkl", 'rb') as f:
-            predictions = pickle.load(f)
+        # print(f"Loading predictions from {args.work_dir}/prediction_{args.out_suffix}.pkl")
+        # with open(f"{args.work_dir}/prediction_{args.out_suffix}.pkl", 'rb') as f:
+        #     predictions = pickle.load(f)
+        predictions = []
 
         result_dict, _ = dataset.evaluation(copy.deepcopy(predictions), output_dir=args.work_dir, testset=args.testset, train=args.pseudo_train)
         if result_dict is not None:
@@ -198,7 +199,7 @@ def main():
 
         with torch.no_grad():
             outputs = batch_processor(
-                model, data_batch, train_mode=False, local_rank=args.local_rank,
+                model, data_batch, train_mode=False, local_rank=cfg.local_rank,
             )
         for output in outputs:
             token = output["metadata"]["token"]
@@ -210,7 +211,7 @@ def main():
             detections.update(
                 {token: output,}
             )
-            if args.local_rank == 0:
+            if cfg.local_rank == 0:
                 prog_bar.update()
 
     synchronize()
@@ -219,7 +220,7 @@ def main():
 
     print("\n Total time per frame: ", (time_end -  time_start) / (end - start))
 
-    if args.local_rank != 0:
+    if cfg.local_rank != 0:
         return
 
     predictions = {}

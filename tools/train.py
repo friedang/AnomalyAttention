@@ -77,6 +77,7 @@ def main():
     args = parse_args()
 
     cfg = Config.fromfile(args.config)
+    cfg.local_rank = int(os.environ["LOCAL_RANK"])
 
     # update configs according to CLI args
     if args.work_dir is not None:
@@ -90,9 +91,9 @@ def main():
 
     if distributed:
         if args.launcher == "pytorch":
-            torch.cuda.set_device(args.local_rank)
+            torch.cuda.set_device(cfg.local_rank)
             torch.distributed.init_process_group(backend="nccl", init_method="env://")
-            cfg.local_rank = args.local_rank
+            # cfg.local_rank = args.local_rank
         elif args.launcher == "slurm":
             proc_id = int(os.environ["SLURM_PROCID"])
             ntasks = int(os.environ["SLURM_NTASKS"])
@@ -119,7 +120,6 @@ def main():
             os.environ["RANK"] = str(proc_id)
 
             dist.init_process_group(backend="nccl")
-            cfg.local_rank = int(os.environ["LOCAL_RANK"])
 
         cfg.gpus = dist.get_world_size()
     else:
@@ -146,8 +146,8 @@ def main():
         set_random_seed(args.seed)
 
     model = build_detector(cfg.model, train_cfg=cfg.train_cfg, test_cfg=cfg.test_cfg)
-    if not distributed:
-            model = model.to(torch.device(f"cuda:{args.gpu_ids[0]}"))
+    # if not distributed: # TODO replace
+    #         model = model.to(torch.device(f"cuda:{args.gpu_ids[0]}")) 
 
     datasets = [build_dataset(cfg.data.train)]
 

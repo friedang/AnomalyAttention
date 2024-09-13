@@ -19,6 +19,29 @@ from nuscenes.utils.splits import create_splits_scenes
 from nuscenes.eval.common.loaders import load_prediction, load_gt
 
 
+def tracking_to_detection(track_path):
+    with open(track_path, "r") as f:
+        data = json.load(f)
+
+    results = data['results']
+    for k, v in results.items():
+        detections = []
+        for det in v:
+            det['detection_name'] = det['tracking_name']
+            del det['tracking_name']
+            det['detection_score'] = det['tracking_score']
+            del det['tracking_score']
+            det['attribute_name'] = ''    
+            detections.append(det)
+        
+        results[k] = detections
+    
+    data['results'] = results
+
+    with open(track_path.replace('tracking_result', 'track_to_det_results'), "w") as f:
+        json.dump(data, f)
+
+
 def update_data(data_path, updates_path):
     with open(data_path, "rb") as f:
         data = pkl.load(f)
@@ -74,18 +97,20 @@ def extract_pseudo_gt(data_path, updates_path):
 
 
 # List of pickle files to merge
-pickle_files = ['./data/nuScenes/infos_train_10sweeps_withvelo_filter_True.pkl', '/workspace/CenterPoint/work_dirs/5_nusc_centerpoint_voxelnet_0075voxel_fix_bn_z/prediction_pseudo.pkl']
+pickle_files = ['./data/nuScenes/infos_train_10sweeps_withvelo_filter_True.pkl', '/workspace/CenterPoint/work_dirs/5_nusc_centerpoint_voxelnet_0075voxel_fix_bn_z/prediction_1.pkl']
 
 # Directory to save the merged file
-output_dir = pickle_files[1].replace('prediction_pseudo.pkl', '')
+output_dir = pickle_files[1].replace('prediction_1.pkl', '')
 output_file_path = os.path.join(output_dir, 'seed_and_pseudo_gt.pkl')
 
 # Merge data and save
 from ipdb import launch_ipdb_on_exception, set_trace
 with launch_ipdb_on_exception():
-    data = update_data(pickle_files[0], pickle_files[1])
+    tracking_to_detection("/workspace/CenterPoint/work_dirs/immo/results_flaseNMS_sc0/results.json")
 
-    # output_file_path = os.path.join(output_dir, 'gt_for_pseudo.pkl')
-    # data = extract_pseudo_gt(pickle_files[0], pickle_files[1])
-    with open(output_file_path, 'wb') as file:
-        pkl.dump(data, file)
+    # data = update_data(pickle_files[0], pickle_files[1])
+
+    # # output_file_path = os.path.join(output_dir, 'gt_for_pseudo.pkl')
+    # # data = extract_pseudo_gt(pickle_files[0], pickle_files[1])
+    # with open(output_file_path, 'wb') as file:
+    #     pkl.dump(data, file)

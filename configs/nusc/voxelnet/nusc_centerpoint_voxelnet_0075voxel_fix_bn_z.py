@@ -76,7 +76,7 @@ test_cfg = dict(
         nms_post_max_size=83,
         nms_iou_threshold=0.2,
     ),
-    score_threshold=0.3, # [0.2, 0.3, 0.3, 0.3, 0.3, 0.3, 0.4, 0.4, 0.3, 0.3], # 0.1,
+    score_threshold=[0.2, 0.3, 0.3, 0.3, 0.3, 0.3, 0.4, 0.4, 0.3, 0.3], # 0.1,
     pc_range=[-54, -54],
     out_size_factor=get_downsample_factor(model),
     voxel_size=[0.075, 0.075]
@@ -175,7 +175,7 @@ work_dir ='./work_dirs/5_{}/'.format(__file__[__file__.rfind('/') + 1:-3])
 
 data = dict(
     samples_per_gpu=14,
-    workers_per_gpu=6,
+    workers_per_gpu=4,
     train=dict(
         type=dataset_type,
         root_path=data_root,
@@ -188,29 +188,29 @@ data = dict(
         load_indices=load_indices,
         sample_ratio=sample_ratio,
     ),
-    # val=dict(
-    #     type=dataset_type,
-    #     root_path=data_root,
-    #     info_path=val_anno,
-    #     test_mode=True,
-    #     ann_file=val_anno,
-    #     nsweeps=nsweeps,
-    #     class_names=class_names,
-    #     pipeline=test_pipeline,
-    # ),
-    # pseudo
     val=dict(
         type=dataset_type,
         root_path=data_root,
-        info_path=train_anno,
-        ann_file=train_anno,
+        info_path=val_anno,
         test_mode=True,
+        ann_file=val_anno,
         nsweeps=nsweeps,
         class_names=class_names,
         pipeline=test_pipeline,
-        load_indices=pseudo_indices,
-        sample_ratio=sample_ratio
     ),
+    # pseudo
+    # val=dict(
+    #     type=dataset_type,
+    #     root_path=data_root,
+    #     info_path=train_anno,
+    #     ann_file=train_anno,
+    #     test_mode=True,
+    #     nsweeps=nsweeps,
+    #     class_names=class_names,
+    #     pipeline=test_pipeline,
+    #     load_indices=pseudo_indices,
+    #     sample_ratio=sample_ratio
+    # ),
     test=dict(
         type=dataset_type,
         root_path=data_root,
@@ -240,7 +240,7 @@ log_config = dict(
     interval=5,
     hooks=[
         dict(type="TextLoggerHook"),
-        dict(type="EmptyCacheHook"),
+        # dict(type="EmptyCacheHook"),
         # dict(type='TensorboardLoggerHook')
     ],
 )

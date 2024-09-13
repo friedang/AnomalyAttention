@@ -186,7 +186,9 @@ def test_time():
     print("Speed is {} FPS".format( max(speeds)  ))
 
 if __name__ == '__main__':
-    save_first_frame()
-    main()
-    # test_time()
-    eval_tracking()
+    from ipdb import launch_ipdb_on_exception, set_trace
+    with launch_ipdb_on_exception():
+        save_first_frame()
+        main()
+        # test_time()
+        eval_tracking()
