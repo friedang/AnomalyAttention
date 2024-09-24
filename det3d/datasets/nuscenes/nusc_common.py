@@ -1,6 +1,8 @@
 import numpy as np
 import pickle
 
+import json
+import os
 from pathlib import Path
 from functools import reduce
 from typing import List
@@ -14,6 +16,7 @@ from nuscenes.utils import splits
 from nuscenes.utils.data_classes import Box
 from nuscenes.utils.geometry_utils import transform_matrix
 from nuscenes.eval.detection.config import config_factory
+from nuscenes.eval.detection.data_classes import DetectionConfig
 from nuscenes.eval.detection.evaluate import NuScenesEval
 # except:
 #     print("nuScenes devkit not Found!")
@@ -607,9 +610,18 @@ def create_nuscenes_infos(root_path, version="v1.0-trainval", nsweeps=10, filter
             pickle.dump(val_nusc_infos, f)
 
 
-def eval_main(nusc, eval_version, res_path, eval_set, output_dir):
+def eval_main(nusc, eval_version, res_path, eval_set, output_dir, ad=True):
     # nusc = NuScenes(version=version, dataroot=str(root_path), verbose=True)
-    cfg = config_factory(eval_version)
+    if ad:
+        this_dir = os.path.dirname(os.path.abspath(__file__))
+        cfg_path = os.path.join(this_dir, 'AD_detection.json')
+        assert os.path.exists(cfg_path), \
+            'Requested unknown configuration AD_detection.json'
+        with open(cfg_path, 'r') as f:
+            data = json.load(f)
+        cfg = DetectionConfig.deserialize(data)
+    else:
+        cfg = config_factory(eval_version)
 
     nusc_eval = NuScenesEval(
         nusc,
