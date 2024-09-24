@@ -33,12 +33,6 @@ def plot_pr():
     metrics_summary = evaluator.main()
 
     import json
-
-    # Load the detailed evaluation results from the output directory
-    summary_results_path = 'work_dirs/10_nusc_centerpoint_voxelnet_0075voxel_fix_bn_z/metrics_summary.json'
-    with open(summary_results_path, 'r') as f:
-        summary_results = json.load(f)
-
     detailed_results_path = 'work_dirs/10_nusc_centerpoint_voxelnet_0075voxel_fix_bn_z/metrics_details.json'
     with open(detailed_results_path, 'r') as f:
         detailed_results = json.load(f)

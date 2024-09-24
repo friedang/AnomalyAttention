@@ -169,7 +169,7 @@ val_anno = "data/nuScenes/infos_val_10sweeps_withvelo_filter_True.pkl"
 test_anno = None
 
 data = dict(
-    samples_per_gpu=22,
+    samples_per_gpu=24,
     workers_per_gpu=2,
     train=dict(
         type=dataset_type,
@@ -233,7 +233,7 @@ dist_params = dict(backend="nccl", init_method="env://")
 log_level = "INFO"
 work_dir = './work_dirs/{}/'.format(__file__[__file__.rfind('/') + 1:-3])
 load_from = None # './work_dirs/5_nusc_centerpoint_voxelnet_0075voxel_fix_bn_z/latest.pth'
-resume_from = '/workspace/CenterPoint/work_dirs/pseudo95_nusc_centerpoint_voxelnet_0075voxel_fix_bn_z/epoch_3.pth' 
+resume_from = '/workspace/CenterPoint/work_dirs/pseudo95_nusc_centerpoint_voxelnet_0075voxel_fix_bn_z/epoch_7.pth' 
 workflow = [('train', 1)]
 
 import os

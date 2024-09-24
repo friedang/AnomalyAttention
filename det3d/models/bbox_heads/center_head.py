@@ -278,7 +278,14 @@ class CenterHead(nn.Module):
 
             loss = hm_loss + self.weight*loc_loss
 
-            ret.update({'loss': loss, 'hm_loss': hm_loss.detach().cpu(), 'loc_loss':loc_loss, 'loc_loss_elem': box_loss.detach().cpu(), 'num_positive': example['mask'][task_id].float().sum()})
+            loss_dict = {'loss': loss, 'hm_loss': hm_loss.detach().cpu(), 'loc_loss':loc_loss, 'loc_loss_elem': box_loss.detach().cpu(), 'num_positive': example['mask'][task_id].float().sum()} 
+            if [torch.isnan(v) for _, v in loss_dict.items() if True in torch.isnan(v)]:
+                import ipdb
+                print(loss)
+                return
+                ipdb.set_trace()
+
+            ret.update(loss_dict)
 
             rets.append(ret)
         

@@ -17,6 +17,7 @@ from nuscenes.utils.data_classes import Box
 from nuscenes.utils.geometry_utils import points_in_box
 from nuscenes.utils.splits import create_splits_scenes
 from nuscenes.eval.common.loaders import load_prediction, load_gt
+from ipdb import set_trace
 
 
 def tracking_to_detection(track_path):
@@ -28,9 +29,9 @@ def tracking_to_detection(track_path):
         detections = []
         for det in v:
             det['detection_name'] = det['tracking_name']
-            del det['tracking_name']
+            # del det['tracking_name']
             det['detection_score'] = det['tracking_score']
-            del det['tracking_score']
+            # del det['tracking_score']
             det['attribute_name'] = ''    
             detections.append(det)
         
@@ -106,7 +107,7 @@ output_file_path = os.path.join(output_dir, 'seed_and_pseudo_gt.pkl')
 # Merge data and save
 from ipdb import launch_ipdb_on_exception, set_trace
 with launch_ipdb_on_exception():
-    tracking_to_detection("/workspace/CenterPoint/work_dirs/immo/results_flaseNMS_sc0/results.json")
+    tracking_to_detection("/workspace/CenterPoint/work_dirs/immo/results/results.json")
 
     # data = update_data(pickle_files[0], pickle_files[1])
 

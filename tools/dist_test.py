@@ -73,7 +73,7 @@ def parse_args():
     parser.add_argument("--local-rank", type=int, default=0)
     parser.add_argument("--out-suffix", type=str, default='1')
     parser.add_argument("--testset", action="store_true")
-    parser.add_argument("--load-preds", default=False, action="store_true")
+    parser.add_argument("--load-preds", type=str, default=None)
     parser.add_argument("--pseudo-train", default=False, action="store_true")
 
     args = parser.parse_args()
@@ -133,12 +133,9 @@ def main():
         dataset = build_dataset(cfg.data.val)
 
     if args.load_preds:
-        # print(f"Loading predictions from {args.work_dir}/prediction_{args.out_suffix}.pkl")
-        # with open(f"{args.work_dir}/prediction_{args.out_suffix}.pkl", 'rb') as f:
-        #     predictions = pickle.load(f)
         predictions = []
-
-        result_dict, _ = dataset.evaluation(copy.deepcopy(predictions), output_dir=args.work_dir, testset=args.testset, train=args.pseudo_train)
+        result_dict, _ = dataset.evaluation(
+            copy.deepcopy(predictions), output_dir=args.work_dir, testset=args.testset, train=args.pseudo_train, res_path=args.load_preds)
         if result_dict is not None:
             for k, v in result_dict["results"].items():
                 print(f"Evaluation {k}: {v}")

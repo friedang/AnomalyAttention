@@ -49,9 +49,7 @@ def build_dataloader(
         shuffle=(sampler is None),
         num_workers=num_workers,
         collate_fn=collate_kitti,
-        # pin_memory=False,
-        # pin_memory=True,
-        # prefetch_factor=2,
+        prefetch_factor=4,
     )
 
     return data_loader

@@ -33,7 +33,7 @@ from det3d.datasets.registry import DATASETS
 
 
 @DATASETS.register_module
-class NuScenesDataset(PointCloudDataset):
+class NuScenesTrackDataset(PointCloudDataset):
     NumPointFeatures = 5  # x, y, z, intensity, ring_index
 
     def __init__(
@@ -336,12 +336,34 @@ class NuScenesDataset(PointCloudDataset):
             plt.close()
 
 
-    def evaluation(self, detections, output_dir=None, testset=False, train=False, res_path=None):
+    def evaluation(self, detections, output_dir=None, testset=False, train=False):
         eval_set_map = {
             "v1.0-mini": "mini_val",
             "v1.0-trainval": "train" if train else "val",
             "v1.0-test": "test",
         }
+
+        # if not testset:
+        #     dets = []
+        #     gt_annos = self.ground_truth_annotations
+        #     assert gt_annos is not None
+
+        #     miss = 0
+        #     for gt in gt_annos:
+        #         try:
+        #             dets.append(detections[gt["token"]])
+        #         except Exception:
+        #             miss += 1
+
+        #     assert miss == 0
+        # else:
+        #     dets = [v for _, v in detections.items()]
+        #     assert len(detections) == 6008
+
+        # nusc_annos = {
+        #     "results": {},
+        #     "meta": None,
+        # }
 
         nusc = NuScenes(version=self.version, dataroot=str(self._root_path), verbose=True)
 
@@ -352,89 +374,67 @@ class NuScenesDataset(PointCloudDataset):
             else:
                 mapped_class_names.append(n)
 
-        if res_path:
-            output_dir = res_path.replace('results.json', '')
-        else:
-            if not testset:
-                dets = []
-                gt_annos = self.ground_truth_annotations
-                assert gt_annos is not None
+        # for det in dets:
+        #     annos = []
+        #     boxes = _second_det_to_nusc_box(det)
+        #     boxes = _lidar_nusc_box_to_global(nusc, boxes, det["metadata"]["token"])
+        #     for i, box in enumerate(boxes):
+        #         name = mapped_class_names[box.label]
+        #         if np.sqrt(box.velocity[0] ** 2 + box.velocity[1] ** 2) > 0.2:
+        #             if name in [
+        #                 "car",
+        #                 "construction_vehicle",
+        #                 "bus",
+        #                 "truck",
+        #                 "trailer",
+        #             ]:
+        #                 attr = "vehicle.moving"
+        #             elif name in ["bicycle", "motorcycle"]:
+        #                 attr = "cycle.with_rider"
+        #             else:
+        #                 attr = None
+        #         else:
+        #             if name in ["pedestrian"]:
+        #                 attr = "pedestrian.standing"
+        #             elif name in ["bus"]:
+        #                 attr = "vehicle.stopped"
+        #             else:
+        #                 attr = None
 
-                miss = 0
-                for gt in gt_annos:
-                    try:
-                        dets.append(detections[gt["token"]])
-                    except Exception:
-                        miss += 1
+        #         nusc_anno = {
+        #             "sample_token": det["metadata"]["token"],
+        #             "translation": box.center.tolist(),
+        #             "size": box.wlh.tolist(),
+        #             "rotation": box.orientation.elements.tolist(),
+        #             "velocity": box.velocity[:2].tolist(),
+        #             "detection_name": name,
+        #             "detection_score": box.score,
+        #             "attribute_name": attr
+        #             if attr is not None
+        #             else max(cls_attr_dist[name].items(), key=operator.itemgetter(1))[
+        #                 0
+        #             ],
+        #         }
+        #         annos.append(nusc_anno)
+        #     nusc_annos["results"].update({det["metadata"]["token"]: annos})
 
-                assert miss == 0
-            else:
-                dets = [v for _, v in detections.items()]
-                assert len(detections) == 6008
+        # nusc_annos["meta"] = {
+        #     "use_camera": False,
+        #     "use_lidar": True,
+        #     "use_radar": False,
+        #     "use_map": False,
+        #     "use_external": False,
+        # }
 
-            nusc_annos = {
-                "results": {},
-                "meta": None,
-            }
+        # name = self._info_path.split("/")[-1].split(".")[0]
+        # res_path = str(Path(output_dir) / Path(name + ".json"))
+        # with open(res_path, "w") as f:
+        #     json.dump(nusc_annos, f)
 
-            for det in dets:
-                annos = []
-                boxes = _second_det_to_nusc_box(det)
-                boxes = _lidar_nusc_box_to_global(nusc, boxes, det["metadata"]["token"])
-                for i, box in enumerate(boxes):
-                    name = mapped_class_names[box.label]
-                    if np.sqrt(box.velocity[0] ** 2 + box.velocity[1] ** 2) > 0.2:
-                        if name in [
-                            "car",
-                            "construction_vehicle",
-                            "bus",
-                            "truck",
-                            "trailer",
-                        ]:
-                            attr = "vehicle.moving"
-                        elif name in ["bicycle", "motorcycle"]:
-                            attr = "cycle.with_rider"
-                        else:
-                            attr = None
-                    else:
-                        if name in ["pedestrian"]:
-                            attr = "pedestrian.standing"
-                        elif name in ["bus"]:
-                            attr = "vehicle.stopped"
-                        else:
-                            attr = None
+        # print(f"Finish generate predictions for testset, save to {res_path}")
 
-                    nusc_anno = {
-                        "sample_token": det["metadata"]["token"],
-                        "translation": box.center.tolist(),
-                        "size": box.wlh.tolist(),
-                        "rotation": box.orientation.elements.tolist(),
-                        "velocity": box.velocity[:2].tolist(),
-                        "detection_name": name,
-                        "detection_score": box.score,
-                        "attribute_name": attr
-                        if attr is not None
-                        else max(cls_attr_dist[name].items(), key=operator.itemgetter(1))[
-                            0
-                        ],
-                    }
-                    annos.append(nusc_anno)
-                nusc_annos["results"].update({det["metadata"]["token"]: annos})
-
-            nusc_annos["meta"] = {
-                "use_camera": False,
-                "use_lidar": True,
-                "use_radar": False,
-                "use_map": False,
-                "use_external": False,
-            }
-
-            name = self._info_path.split("/")[-1].split(".")[0]
-            res_path = str(Path(output_dir) / Path(name + ".json"))
-            with open(res_path, "w") as f:
-                json.dump(nusc_annos, f)
-
-            print(f"Finish generate predictions for testset, save to {res_path}")
+        output_dir = "/workspace/CenterPoint/work_dirs/immo/results_custom_pass/"
+        res_path = Path("/workspace/CenterPoint/work_dirs/immo/results_custom_pass/results.json") # TODO add json result pathing option
         
         if not testset:
             eval_main(
