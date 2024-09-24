@@ -16,3 +16,6 @@ venv/
 .vscode/
 wandb/
 work_dirs/
+Dockerfile
+.gitignore
+.devcontainer/
