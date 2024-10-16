@@ -40,7 +40,8 @@ class FastFocalLoss(nn.Module):
     '''
     mask = mask.float()
     gt = torch.pow(1 - target, 4)
-    neg_loss = torch.log(1 - out) * torch.pow(out, 2) * gt
+    epsilon = 1e-6
+    neg_loss = torch.log(1 - out + epsilon) * torch.pow(out, 2) * gt
     neg_loss = neg_loss.sum()
 
     pos_pred_pix = _transpose_and_gather_feat(out, ind) # B x M x C

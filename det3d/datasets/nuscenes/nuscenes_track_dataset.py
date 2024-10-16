@@ -22,6 +22,7 @@ from nuscenes.utils.splits import create_splits_scenes
     # print("nuScenes devkit not found!")
 
 from det3d.datasets.custom import PointCloudDataset
+from det3d.datasets.nuscenes.utils import load_json, save_json
 from det3d.datasets.nuscenes.nusc_common import (
     general_to_detection,
     cls_attr_dist,
@@ -30,6 +31,84 @@ from det3d.datasets.nuscenes.nusc_common import (
     eval_main
 )
 from det3d.datasets.registry import DATASETS
+
+
+import torch
+from torch.utils.data import Dataset, DataLoader
+
+class SceneDataset(Dataset):
+    def __init__(self, scenes_info, track_info):
+        # scenes is a dict where keys are scene names, and values are lists of tensors
+        scenes_info = scenes_info
+        track_info = track_info
+        self.scene_names = list(scenes_info.keys())
+
+        self.chunks = []
+        chunk_size = 4
+
+        dummy = {'translation': [-500, -500, -500], 'size': [-500, -500, -500], 'rotation': [-500, -500, -500, -500],
+                      'sample_token': 'dummy', 'TP': -500, 'num_lidar_pts': -500}
+        max_track_len = 41
+        max_scene_size = 2348
+
+        self.scenes = {k: [] for k in self.scene_names}
+        for name in self.scene_names:
+            track_names = scenes_info[name]
+            for n in track_names:
+                self.scenes[name].append(track_info[n])
+            
+            if len(self.scenes[name]) < max_scene_size:
+               track_len_diff = max_scene_size - len(self.scenes[name])
+               dummy_track = [dummy] * 41
+               for _ in range(track_len_diff):
+                   self.scenes[name].append(dummy_track)
+
+        # Convert each scene's list of dicts into a tensor
+        for name in self.scenes.keys():
+            scene_data = self.scenes[name]
+            for i in range(0, max_track_len*chunk_size - 1, chunk_size):
+                scene_data = self.scenes[name][0] + self.scenes[name][1] + self.scenes[name][2] + self.scenes[name][3]
+                if all(d == dummy for d in scene_data[i:i + chunk_size]):
+                    continue
+                else:
+                    self.chunks.append(
+                        self._collate_scene(scene_data[i:i + chunk_size]))
+            # self.scenes[name] = self._collate_scene(self.scenes[name])
+
+    def _collate_scene(self, scene_data):
+        """
+        Converts a list of dicts for one scene into a single tensor by extracting values from each field.
+        Returns a tensor where the first dimension is the number of tracks (max_scene_size), 
+        and subsequent dimensions depend on the field sizes.
+        """
+        translations = torch.tensor([d['translation'] for d in scene_data], dtype=torch.float32)
+        sizes = torch.tensor([d['size'] for d in scene_data], dtype=torch.float32)
+        rotations = torch.tensor([d['rotation'] for d in scene_data], dtype=torch.float32)
+        tp = torch.tensor([d['TP'] for d in scene_data], dtype=torch.float32)
+        num_lidar_pts = torch.tensor([d['num_lidar_pts'] for d in scene_data], dtype=torch.float32)
+        tokens = [d['sample_token'] for d in scene_data]
+
+        # Stack all tensors together into one large tensor for the scene
+        return (tp.unsqueeze(-1),
+                tokens,
+                torch.cat([translations, sizes, rotations, num_lidar_pts.unsqueeze(-1)], dim=-1))
+
+    def __len__(self):
+        # return len(self.scene_names)
+        return len(self.chunks)
+
+    def __getitem__(self, idx):
+        # Return all tensors from a specific scene
+        return self.chunks[idx]
+    
+
+import json
+scenes_info = json.load(open('/workspace/CenterPoint/work_dirs/immo/cp_5_seed_2hz/scene2trackname_tp.json', "r"))
+track_info = json.load(open('/workspace/CenterPoint/work_dirs/immo/cp_5_seed_2hz/tp_padded_tracks.json', "r"))
+
+from ipdb import launch_ipdb_on_exception, set_trace
+with launch_ipdb_on_exception():
+    test = SceneDataset(scenes_info, track_info)
 
 
 @DATASETS.register_module
@@ -52,7 +131,7 @@ class NuScenesTrackDataset(PointCloudDataset):
         **kwargs,
     ):
         self.load_interval = load_interval 
-        super(NuScenesDataset, self).__init__(
+        super(NuScenesTrackDataset, self).__init__(
             root_path, info_path, pipeline, test_mode=test_mode, class_names=class_names, sample_ratio=sample_ratio,
         )
 
@@ -66,7 +145,7 @@ class NuScenesTrackDataset(PointCloudDataset):
         self.load_infos(self._info_path, sample_ratio, load_indices)
         self.flag = np.ones(len(self), dtype=np.uint8)
 
-        self._num_point_features = NuScenesDataset.NumPointFeatures
+        self._num_point_features = NuScenesTrackDataset.NumPointFeatures
         self._name_mapping = general_to_detection
 
         self.virtual = kwargs.get('virtual', False)
@@ -80,142 +159,14 @@ class NuScenesTrackDataset(PointCloudDataset):
         self.logger.info(f"re-sample {self.frac} frames from full set")
         random.shuffle(self._nusc_infos_all)
         self._nusc_infos = self._nusc_infos_all[: self.frac]
-    
-    def map_timestamps_to_sequences(self, nusc, train_scenes, timestamps):
-        timestamp_to_sequence = {}
-
-        for scene in nusc.scene:
-            if scene['name'] not in train_scenes:
-                continue
-            timestamp_to_sequence[scene['name']] = []
-            # Get first and last sample tokens
-            first_sample_token = scene['first_sample_token']
-            last_sample_token = scene['last_sample_token']
-            
-            # Get start and end timestamps from the first and last samples
-            start_time = nusc.get('sample', first_sample_token)['timestamp']
-            end_time = nusc.get('sample', last_sample_token)['timestamp']
-            
-            # Map the provided timestamps to the scene (sequence)
-            for timestamp in timestamps:
-                if start_time <= float(str(timestamp).replace('.','')) <= end_time:
-                    timestamp_to_sequence[scene['name']] += [timestamp]
-        
-        return timestamp_to_sequence
-
-    def get_class_distribution(self, nusc, scene_names, classes):
-        from collections import Counter
-        import tqdm
-        class_counter = Counter()
-
-        for scene in tqdm.tqdm(nusc.scene):
-            if scene['name'] not in scene_names:
-                continue
-
-            sample = nusc.get('sample', scene['first_sample_token'])
-            while sample:
-                for ann_token in sample['anns']:
-                    ann = nusc.get('sample_annotation', ann_token)
-                    if any([c for c in classes if c in ann['category_name']]):
-                        class_counter[ann['category_name']] += 1
-                
-                if sample['next'] == '':
-                    break
-                sample = nusc.get('sample', sample['next'])
-
-        dis = {}
-        dis_cat_names = dict(class_counter)
-
-        for c in classes:
-            dis[c] = 0
-            vals = {k: v for k,v in dis_cat_names.items() if c in k}
-            dis[c] += np.sum(list(vals.values()))
-
-        return dis
 
     def load_infos(self, info_path, sample_ratio=1, load_indices=None):
-
         with open(self._info_path, "rb") as f:
-            _nusc_infos_all = pickle.load(f)
+            _nusc_infos_all = load_json(f)
 
         _nusc_infos_all = _nusc_infos_all[::self.load_interval]
 
-        if sample_ratio != 1 or load_indices != None:
-            ts_all = [_nusc_infos_all[i]['timestamp'] for i in range(len(_nusc_infos_all))]
-            nusc = NuScenes(version='v1.0-trainval', dataroot=str(self._root_path), verbose=True)
-            train_scenes = create_splits_scenes()['train']
-            timestamp_to_sequence = self.map_timestamps_to_sequences(nusc, train_scenes, ts_all)
-            train_scene_names = list(timestamp_to_sequence.keys())
-
-            if load_indices:
-                self.train_indices = torch.load(load_indices)
-                print(f"Loaded indices from {load_indices}")         
-            else:
-                print(f"Sample {sample_ratio*100}% of the dataset.")
-                torch.manual_seed(random.randint(0, sys.maxsize))
-                total_indices = torch.randperm(len(train_scene_names))
-                split = int(sample_ratio * len(train_scene_names))
-                train_scene_names = [x for _, x in sorted(zip(total_indices, train_scene_names))]
-                self.train_indices = train_scene_names[:split]
-                self.pseudo_indices = train_scene_names[split:]
-                
-                save_path = f"/workspace/CenterPoint/work_dirs/cp_{int(sample_ratio*100)}"
-                if not os.path.isdir(save_path):
-                    os.mkdir(save_path)
-                torch.save(self.train_indices, f"{save_path}/train_indices.pth")
-                torch.save(self.pseudo_indices, f"{save_path}/pseudo_indices.pth")
-            
-            classes = ["car", "truck", "bus", "trailer", "vehicle.construction", "pedestrian",
-                       "motorcycle", "bicycle", "trafficcone", "barrier"]
-            class_distribution = self.get_class_distribution(nusc, self.train_indices, classes)
-            print(class_distribution) 
-
-            print(f"Original # of Frames is {len(_nusc_infos_all)}")
-            print(f"Original # of Scenes is {len(train_scenes)}")
-            scenes = {k: v for k, v in timestamp_to_sequence.items() if k in self.train_indices}
-            timestamps = [t for ts in scenes.values() for t in ts]
-            _nusc_infos_all = [i for i in _nusc_infos_all if i['timestamp'] in timestamps]
-            print(f"New # of Frames is {len(_nusc_infos_all)}")
-            print(f"New # of Scenes is {len(self.train_indices)}")
-
-        if not self.test_mode:  # if training
-            self.frac = int(len(_nusc_infos_all) * 0.25)
-
-            _cls_infos = {name: [] for name in self._class_names}
-            for info in _nusc_infos_all:
-                for name in set(info["gt_names"]):
-                    if name in self._class_names:
-                        _cls_infos[name].append(info)
-
-            duplicated_samples = sum([len(v) for _, v in _cls_infos.items()])
-            _cls_dist = {k: len(v) / max(duplicated_samples, 1) for k, v in _cls_infos.items()}
-
-            self._nusc_infos = []
-
-            frac = 1.0 / len(self._class_names)
-            ratios = [frac / v for v in _cls_dist.values()]
-
-            for cls_infos, ratio in zip(list(_cls_infos.values()), ratios):
-                self._nusc_infos += np.random.choice(
-                    cls_infos, int(len(cls_infos) * ratio)
-                ).tolist()
-
-            _cls_infos = {name: [] for name in self._class_names}
-            for info in self._nusc_infos:
-                for name in set(info["gt_names"]):
-                    if name in self._class_names:
-                        _cls_infos[name].append(info)
-
-            _cls_dist = {
-                k: len(v) / len(self._nusc_infos) for k, v in _cls_infos.items()
-            }
-        else:
-            if isinstance(_nusc_infos_all, dict):
-                self._nusc_infos = []
-                for v in _nusc_infos_all.values():
-                    self._nusc_infos.extend(v)
-            else:
-                self._nusc_infos = _nusc_infos_all
+        self._nusc_infos = list(_nusc_infos_all.keys())
 
     def __len__(self):
 
@@ -286,55 +237,6 @@ class NuScenesTrackDataset(PointCloudDataset):
 
     def __getitem__(self, idx):
         return self.get_sensor_data(idx)
-
-    def plot_results(self, output_dir, x, y):
-        detailed_results_path = output_dir + '/metrics_details.json'
-        with open(detailed_results_path, 'r') as f:
-            detailed_results = json.load(f)
-        objects = detailed_results.keys()
-        classes = []
-        for obj in objects:
-            if obj[:-4] not in classes:
-                classes.append(obj[:-4])
-
-        colors = [
-            "#FF5733",  # Red
-            "#33FF57",  # Green
-            "#3357FF",  # Blue
-            "#33FFFF",  # Cyan
-            "#FF33FF",  # Magenta
-            "#FFFF33",  # Yellow
-            ]
-
-        for c in classes:
-            # Filter objects by class
-            obj_by_c = [obj for obj in objects if c in obj]
-
-            # Create a new figure for this class
-            plt.figure(figsize=(8, 6))
-
-            # Loop over each subclass object and plot the PR curve with different colors
-            for idx, o in enumerate(obj_by_c):
-                obj_results = detailed_results[o]
-
-                x_quantity = obj_results[f"{x}"]
-                y_quantity = obj_results[f"{y}"]
-
-                plt.plot(x_quantity, y_quantity, label=o, marker='o', linestyle='-', color=colors[idx])
-
-            plt.title(f'{y}-{x} curve for {c} class')
-            plt.xlabel(f'{x}')
-            plt.ylabel(f'{y}')
-            plt.grid(True)
-            if x == 'confidence':
-                plt.xlim([1, 0])
-            else:
-                plt.xlim([0, 1])
-            plt.ylim([0, 1])
-            plt.legend(title='Subclasses')
-            plt.savefig(f"{detailed_results_path.replace('metrics_details.json', 'plots/' + y + '-' + x + '_' + c)}.png")
-            plt.close()
-
 
     def evaluation(self, detections, output_dir=None, testset=False, train=False):
         eval_set_map = {
@@ -466,8 +368,6 @@ class NuScenesTrackDataset(PointCloudDataset):
                 "results": {"nusc": result},
                 "detail": {"nusc": detail},
             }
-            self.plot_results(output_dir, 'confidence', 'precision')
-            self.plot_results(output_dir, 'confidence', 'recall')
         else:
             res_nusc = None
 

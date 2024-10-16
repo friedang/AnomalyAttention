@@ -50,7 +50,7 @@ def load_prediction(result_path: str, max_boxes_per_sample: int, box_cls, verbos
     return all_results, meta
 
 
-def load_gt(nusc: NuScenes, eval_split: str, box_cls, verbose: bool = False) -> EvalBoxes:
+def load_gt(nusc: NuScenes, eval_split: str, box_cls, verbose: bool = False, sample_tokens: list = None) -> EvalBoxes:
     """
     Loads ground truth boxes from DB.
     :param nusc: A NuScenes instance.
@@ -65,9 +65,6 @@ def load_gt(nusc: NuScenes, eval_split: str, box_cls, verbose: bool = False) -> 
 
     if verbose:
         print('Loading annotations for {} split from nuScenes version: {}'.format(eval_split, nusc.version))
-    # Read out all sample_tokens in DB.
-    sample_tokens_all = [s['token'] for s in nusc.sample]
-    assert len(sample_tokens_all) > 0, "Error: Database has no samples!"
 
     # Only keep samples from this split.
     splits = create_splits_scenes()
@@ -92,20 +89,30 @@ def load_gt(nusc: NuScenes, eval_split: str, box_cls, verbose: bool = False) -> 
         assert len(nusc.sample_annotation) > 0, \
             'Error: You are trying to evaluate on the test set but you do not have the annotations!'
 
-    sample_tokens = []
-    for sample_token in sample_tokens_all:
-        scene_token = nusc.get('sample', sample_token)['scene_token']
-        scene_record = nusc.get('scene', scene_token)
-        if scene_record['name'] in splits[eval_split]:
-            sample_tokens.append(sample_token)
+    if not sample_tokens:
+        # Read out all sample_tokens in DB.
+        sample_tokens_all = [s['token'] for s in nusc.sample]
+        assert len(sample_tokens_all) > 0, "Error: Database has no samples!"
+    
+        sample_tokens = []
+        for sample_token in sample_tokens_all:
+            scene_token = nusc.get('sample', sample_token)['scene_token']
+            scene_record = nusc.get('scene', scene_token)
+            if scene_record['name'] in splits[eval_split]:
+                sample_tokens.append(sample_token)
 
     all_annotations = EvalBoxes()
 
     # Load annotations and filter predictions and annotations.
     tracking_id_set = set()
+    nk_tokens = []
     for sample_token in tqdm.tqdm(sample_tokens, leave=verbose):
 
-        sample = nusc.get('sample', sample_token)
+        try:
+            sample = nusc.get('sample', sample_token)
+        except:
+            nk_tokens.append(sample_token)
+            continue
         sample_annotation_tokens = sample['anns']
 
         sample_boxes = []
@@ -169,7 +176,43 @@ def load_gt(nusc: NuScenes, eval_split: str, box_cls, verbose: bool = False) -> 
             else:
                 raise NotImplementedError('Error: Invalid box_cls %s!' % box_cls)
 
+        print(f"Found {len(sample_boxes)} sample boxes for GT. And {len(nk_tokens)} non-keyframes")
         all_annotations.add_boxes(sample_token, sample_boxes)
+
+    if nk_tokens:
+        nk_tokens = list(set(nk_tokens))
+        import pickle
+        nk_data = pickle.load(open("./work_dirs/5_nusc_centerpoint_voxelnet_0075voxel_fix_bn_z/nk_seed5.pkl", "rb"))
+        for d in nk_data:
+            if not nk_tokens:
+                break
+            if not d['token'] not in nk_tokens:
+                continue
+            if d['token'] not in sample_tokens:
+                continue
+
+            boxes = []
+            for i, _ in enumerate(d['gt_boxes']):
+                    b = nusc.get_box( d['gt_boxes_token'][i])
+                    if d['gt_names'][i] == 'ignore':
+                        continue
+                    boxes.append(
+                        box_cls(
+                            sample_token=d['token'],
+                            translation=b.center,
+                            size=b.wlh,
+                            rotation=b.orientation.elements,
+                            velocity=(0, 0),
+                            num_pts=0, # TODO fix
+                            detection_name=d['gt_names'][i],
+                            detection_score=-1.0,  # GT samples do not have a score.
+                            attribute_name='')
+                    )
+
+            nk_tokens.remove(d['token'])
+            all_annotations.add_boxes(d['token'], boxes)
+        
+        print('OPEN TODO')
 
     if verbose:
         print("Loaded ground truth annotations for {} samples.".format(len(all_annotations.sample_tokens)))

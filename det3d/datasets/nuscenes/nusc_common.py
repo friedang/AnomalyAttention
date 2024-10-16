@@ -351,7 +351,114 @@ def find_closet_camera_tokens(nusc, pointsensor, ref_sample):
             
         min_cams[chan] = min_cam 
 
-    return min_cams     
+    return min_cams  
+
+
+def _fill_non_keyframe_infos(nusc, infos, nsweeps=10):
+    from nuscenes.utils.geometry_utils import transform_matrix
+
+    nk_infos = []
+
+    for info in tqdm(infos):
+        sample = nusc.get('sample', info['token'])
+        sd_token = sample["data"]["LIDAR_TOP"]
+
+        while sd_token:
+            """ Manual save info["sweeps"] """        
+            # Get reference pose and timestamp
+            ref_sd_rec = nusc.get("sample_data", sd_token)
+            if ref_sd_rec['is_key_frame']:
+                sd_token = ref_sd_rec['prev']
+                continue
+
+            ref_cs_rec = nusc.get(
+                "calibrated_sensor", ref_sd_rec["calibrated_sensor_token"]
+            )
+            ref_pose_rec = nusc.get("ego_pose", ref_sd_rec["ego_pose_token"])
+            ref_time = 1e-6 * ref_sd_rec["timestamp"]
+
+            ref_lidar_path, ref_boxes, _ = get_sample_data(nusc, sd_token)
+
+            ref_cam_front_token = sample["data"]["CAM_FRONT"]
+            ref_cam_path, _, ref_cam_intrinsic = nusc.get_sample_data(ref_cam_front_token)
+
+            # Homogeneous transform from ego car frame to reference frame
+            ref_from_car = transform_matrix(
+                ref_cs_rec["translation"], Quaternion(ref_cs_rec["rotation"]), inverse=True
+            )
+
+            # Homogeneous transformation matrix from global to _current_ ego car frame
+            car_from_global = transform_matrix(
+                ref_pose_rec["translation"],
+                Quaternion(ref_pose_rec["rotation"]),
+                inverse=True,
+            )
+
+            ref_cams = {}
+            # get all camera sensor data
+            for cam_chan in CAM_CHANS:
+                camera_token = sample['data'][cam_chan]
+                cam = nusc.get('sample_data', camera_token)
+
+                ref_cams[cam_chan] = cam 
+
+            # get camera info for point painting 
+            all_cams_from_lidar, all_cams_intrinsic, all_cams_path = get_lidar_to_image_transform(nusc, pointsensor=ref_sd_rec, camera_sensor=ref_cams)    
+
+            info = {
+                "lidar_path": ref_lidar_path,
+                "cam_front_path": ref_cam_path,
+                "cam_intrinsic": ref_cam_intrinsic,
+                "token": sd_token,  #TODO
+                "sweeps": [],
+                "ref_from_car": ref_from_car,
+                "car_from_global": car_from_global,
+                "timestamp": ref_time,
+                "all_cams_from_lidar": all_cams_from_lidar,
+                "all_cams_intrinsic": all_cams_intrinsic,
+                "all_cams_path": all_cams_path
+            }
+
+            curr_sd_rec = ref_sd_rec
+            sweep = {
+                "lidar_path": ref_lidar_path,
+                "sample_data_token": sd_token,
+                "transform_matrix": None,
+                "time_lag": curr_sd_rec["timestamp"] * 0,
+                "all_cams_from_lidar": all_cams_from_lidar,
+                "all_cams_intrinsic": all_cams_intrinsic,
+                "all_cams_path": all_cams_path
+                }
+            info["sweeps"] = [sweep] * (nsweeps - 1)
+
+            valid_gt_idx = [i for i in range(names) if general_to_detection[names[i]] not in ['ignore', '']]
+            if not valid_gt_idx:
+                sd_token = ref_sd_rec['prev']
+                continue
+
+            locs = np.array([b.center for i, b in enumerate(ref_boxes) if i in valid_gt_idx]).reshape(-1, 3)
+            dims = np.array([b.wlh for i, b in enumerate(ref_boxes) if i in valid_gt_idx]).reshape(-1, 3)
+            velocity = np.array([b.velocity for i, b in enumerate(ref_boxes) if i in valid_gt_idx]).reshape(-1, 3)
+            rots = np.array([quaternion_yaw(b.orientation) for i, b in enumerate(ref_boxes) if i in valid_gt_idx]).reshape(
+                -1, 1
+            )
+            names = np.array([b.name for i, b in enumerate(ref_boxes) if i in valid_gt_idx])
+            tokens = np.array([b.token for i, b in enumerate(ref_boxes) if i in valid_gt_idx])
+            gt_boxes = np.concatenate(
+                [locs, dims, velocity[:, :2], -rots - np.pi / 2], axis=1
+            )
+
+            assert len(gt_boxes) == len(velocity)
+
+            info["gt_boxes"] = gt_boxes
+            info["gt_boxes_velocity"] = velocity
+            info["gt_names"] = np.array([general_to_detection[name] for name in names])
+            info["gt_boxes_token"] = tokens
+
+            nk_infos.append(info)
+            sd_token = ref_sd_rec['prev']
+
+    return nk_infos
 
 
 def _fill_trainval_infos(nusc, train_scenes, val_scenes, test=False, nsweeps=10, filter_zero=True):

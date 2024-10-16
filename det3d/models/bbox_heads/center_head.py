@@ -467,7 +467,7 @@ class CenterHead(nn.Module):
             scores, labels = torch.max(hm_preds, dim=-1)
             
             thresholds = test_cfg.score_threshold if isinstance(test_cfg.score_threshold, list) else [test_cfg.score_threshold]
-            score_mask = scores > torch.tensor(thresholds, device=labels.device)[labels] if len(thresholds) > 1 else scores > torch.tensor(thresholds)
+            score_mask = scores > torch.tensor(thresholds, device=labels.device)[labels] if len(thresholds) > 1 else scores > torch.tensor(thresholds, device=labels.device)
             distance_mask = (box_preds[..., :3] >= post_center_range[:3]).all(1) \
                 & (box_preds[..., :3] <= post_center_range[3:]).all(1)
 

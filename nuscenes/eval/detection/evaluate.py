@@ -80,8 +80,9 @@ class DetectionEval:
             print('Initializing nuScenes detection evaluation')
         self.pred_boxes, self.meta = load_prediction(self.result_path, self.cfg.max_boxes_per_sample, DetectionBox,
                                                      verbose=verbose)
-        self.gt_boxes = load_gt(self.nusc, self.eval_set, DetectionBox, verbose=verbose)
-
+        sample_tokens = list(set(self.pred_boxes.sample_tokens)) if eval_set == 'train' else None
+        self.gt_boxes = load_gt(self.nusc, self.eval_set, DetectionBox, verbose=verbose, sample_tokens=sample_tokens)
+        
         assert set(self.pred_boxes.sample_tokens) == set(self.gt_boxes.sample_tokens), \
             "Samples in split doesn't match samples in predictions."
 
