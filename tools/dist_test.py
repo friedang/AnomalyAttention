@@ -2,7 +2,6 @@ import argparse
 import copy
 import json
 import os
-from os import path as osp
 import shutil
 import sys
 
@@ -34,19 +33,15 @@ import time
 import wandb
 
 def save_pred(pred, root):
-    counter = 1
     pklfile_prefix = os.path.join(root, "prediction")
-    while osp.exists(pklfile_prefix + '.pkl'):
-        counter += 1
-    
-    result_path = f"{pklfile_prefix}_{counter}.pkl"
+    result_path = f"{pklfile_prefix}.pkl"
     with open(result_path, "wb") as f:
         pickle.dump(pred, f)
 
 
 def parse_args():
-    parser = argparse.ArgumentParser(description="Train a detector")
-    parser.add_argument("config", help="train config file path")
+    parser = argparse.ArgumentParser(description="Eval a detector")
+    parser.add_argument("config", help="config file path")
     parser.add_argument("--work_dir", required=True, help="the dir to save logs and models")
     parser.add_argument(
         "--checkpoint", help="the dir to checkpoint which the model read from"
@@ -74,7 +69,7 @@ def parse_args():
     parser.add_argument("--out-suffix", type=str, default='1')
     parser.add_argument("--testset", action="store_true")
     parser.add_argument("--load-preds", type=str, default=None)
-    parser.add_argument("--pseudo-train", default=False, action="store_true")
+    parser.add_argument("--train", default=False, action="store_true")
 
     args = parser.parse_args()
     if "LOCAL_RANK" not in os.environ:
@@ -83,14 +78,12 @@ def parse_args():
     return args
 
 
-def main():
+def main(args):
 
     # torch.manual_seed(0)
     # torch.backends.cudnn.deterministic = True
     # torch.backends.cudnn.benchmark = False
     # np.random.seed(0)
-
-    args = parse_args()
 
     cfg = Config.fromfile(args.config)
     cfg.local_rank = int(os.environ["LOCAL_RANK"])
@@ -103,8 +96,6 @@ def main():
     # if not os.path.exists(osp.join(cfg.work_dir)):
     #     os.makedirs(osp.join(cfg.work_dir), exist_ok=True)
     # shutil.copy('/workspace/CenterPoint/configs/nusc/voxelnet/nusc_centerpoint_voxelnet_0075voxel_fix_bn_z.py', osp.join(cfg.work_dir, 'test_' + osp.basename(args.config)))
-
-    wandb.init("cp_5seed95pseudo") # project=cfg.project_name)
 
     distributed = False
     if "WORLD_SIZE" in os.environ:
@@ -126,16 +117,16 @@ def main():
     model = build_detector(cfg.model, train_cfg=None, test_cfg=cfg.test_cfg)
 
     if args.testset:
-        print("Use Test Set")
+        print("Use Test Config")
         dataset = build_dataset(cfg.data.test)
     else:
-        print("Use Val Set")
+        print("Use Val Config")
         dataset = build_dataset(cfg.data.val)
 
     if args.load_preds:
         predictions = []
         result_dict, _ = dataset.evaluation(
-            copy.deepcopy(predictions), output_dir=args.work_dir, testset=args.testset, train=args.pseudo_train, res_path=args.load_preds)
+            copy.deepcopy(predictions), output_dir=args.work_dir, testset=args.testset, train=args.train, res_path=args.load_preds)
         if result_dict is not None:
             for k, v in result_dict["results"].items():
                 print(f"Evaluation {k}: {v}")
@@ -229,7 +220,7 @@ def main():
 
     save_pred(predictions, args.work_dir)
 
-    result_dict, _ = dataset.evaluation(copy.deepcopy(predictions), output_dir=args.work_dir, testset=args.testset, train=args.pseudo_train)
+    result_dict, _ = dataset.evaluation(copy.deepcopy(predictions), output_dir=args.work_dir, testset=args.testset, train=args.train)
 
     if result_dict is not None:
         for k, v in result_dict["results"].items():
@@ -242,4 +233,13 @@ if __name__ == "__main__":
     # main()
     from ipdb import launch_ipdb_on_exception, set_trace
     with launch_ipdb_on_exception():
-        main()
+        # wandb.init("cp_5seed95pseudo") # project=cfg.project_name)
+        args = parse_args()
+
+        # ch = './work_dirs/5_nusc_centerpoint_voxelnet_0075voxel_fix_bn_z/epoch_1.pth'
+        # wdir = args.work_dir
+        # for e in [1]:
+        #     args.checkpoint = ch[:-500] + f"{e}.pth"
+        #     args.work_dir = wdir + f"eval_{e}"
+
+        main(args)

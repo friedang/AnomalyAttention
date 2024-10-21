@@ -49,7 +49,7 @@ def farthest_point_sampling(points, num_samples):
     samples = point_cloud.farthest_point_down_sample(num_samples)
     samples = cp.asarray(samples.points)  # Convert back to CuPy array
     
-    mask = cp.isclose(points[:, None, :3], samples[None, :, :], atol=1e-5).all(-1)
+    mask = cp.isclose(points[:, None, :3], samples[None, :, :], atol=1e-500).all(-1)
     matching_indices = cp.where(mask.any(1))[0]
 
     if len(matching_indices) > num_samples:
@@ -227,15 +227,15 @@ def extract_gt_tracks(nusc: NuScenes, sample_tokens: List[str]) -> Dict[str, Lis
 
             c = 0
             i = instance_token
-            while len(gt_tracks[i]) >= 5:
-                if i.endswith(f"_{c}"):
-                    c += 1
-                    i = i[:-1] + f"{c}"
-                else:
-                    i = i[:-1] + f"_{c}"
+            # while len(gt_tracks[i]) >= 5:
+            #     if i.endswith(f"_{c}"):
+            #         c += 1
+            #         i = i[:-1] + f"{c}"
+            #     else:
+            #         i = i[:-1] + f"_{c}"
                 
-                if i not in gt_tracks.keys():
-                    gt_tracks[i] = []
+            #     if i not in gt_tracks.keys():
+            #         gt_tracks[i] = []
             
             annotation['TP'] = 1
             # box = {
@@ -267,6 +267,8 @@ def extract_gt_tracks(nusc: NuScenes, sample_tokens: List[str]) -> Dict[str, Lis
 
             gt_tracks[i].append(annotation)
 
+    gt_tracks = {k: t for k, t in gt_tracks.items() if t != []}
+
     # set_trace()
     length = [len(t) for t in gt_tracks.values()]
 
@@ -292,7 +294,7 @@ def get_scene_from_sample(nusc, sample_token):
 
 def padd_scene_tracks(nusc, scene_track_map, tracks):
     dummy = {'translation': [-500, -500, -500], 'size': [-500, -500, -500], 'rotation': [-500, -500, -500, -500],
-             'sample_token': 'dummy', 'TP': -500, 'num_lidar_pts': -500}
+             'sample_token': 'dummy', 'TP': -500, 'num_lidar_pts': -500, 'tracking_id': 'dummy'}
     max_track_len = 41
 
     for scene in tqdm.tqdm(nusc.scene):
@@ -370,25 +372,31 @@ def main():
     # p_tracks = create_tracks(detection_results, nusc)
     # save_json(p_tracks, input_file.replace('results', 'track_info'), cls=NpEncoder)
 
-    # Save pointclouds as npy
-    # tokens = list(detection_results['results'].keys())
+    ## Save pointclouds as npy
+    # convert_pc_npy(output_directory='/workspace/CenterPoint/work_dirs/PCs_npy/train', nusc, tokens)
 
+    ## Create GT tracks
+    # tokens = list(detection_results['results'].keys())
     # gt_tracks = extract_gt_tracks(nusc, tokens)
     # save_json(gt_tracks, input_file.replace('results', 'gt_track_info'), cls=NpEncoder)
 
+    tracks = load_json('/workspace/CenterPoint/work_dirs/immo/cp_5_seed_2hz/gt_track_info_tp.json')
     ## scene to track mapping
     # input_file = '/workspace/CenterPoint/work_dirs/immo/cp_5_seed_2hz/track_info_tp.json'
     # scene_names = torch.load('/workspace/CenterPoint/work_dirs/5_nusc_centerpoint_voxelnet_0075voxel_fix_bn_z/train_indices.pth')
     # tracks = load_json(input_file)
     # scene_mapping = create_scene_track_mapping(nusc, scene_names, tracks)
     # save_json(scene_mapping, input_file.replace('track_info', 'scene2trackname'))
+    # save_json(scene_mapping, input_file.replace('track_info', 'gt_scene2trackname'))
 
 
-    input_file = '/workspace/CenterPoint/work_dirs/immo/cp_5_seed_2hz/scene2trackname_tp.json'
+    # input_file = '/workspace/CenterPoint/work_dirs/immo/cp_5_seed_2hz/scene2trackname_tp.json'
+    input_file = '/workspace/CenterPoint/work_dirs/immo/cp_5_seed_2hz/gt_scene2trackname_tp.json'
     map_scene_track = load_json(input_file)
-    tracks = load_json('/workspace/CenterPoint/work_dirs/immo/cp_5_seed_2hz/track_info_tp.json')
+    # tracks = load_json('/workspace/CenterPoint/work_dirs/immo/cp_5_seed_2hz/track_info_tp.json')
     padded_tracks = padd_scene_tracks(nusc, map_scene_track, tracks)
-    save_json(padded_tracks, '/workspace/CenterPoint/work_dirs/immo/cp_5_seed_2hz/track_info_tp_padded_tracks.json')
+    # save_json(padded_tracks, '/workspace/CenterPoint/work_dirs/immo/cp_5_seed_2hz/track_info_tp_padded_tracks.json')
+    save_json(padded_tracks, '/workspace/CenterPoint/work_dirs/immo/cp_5_seed_2hz/gt_track_info_tp_padded_tracks.json')
 
 if __name__ == "__main__":
     from ipdb import launch_ipdb_on_exception, set_trace

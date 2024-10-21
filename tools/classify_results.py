@@ -243,17 +243,48 @@ def classify_detections(detection_results, nusc, eval_split, result_path, output
 
 def main():
     # Load the JSON file
-    input_file = '/workspace/CenterPoint/work_dirs/immo/results_max_pass_ctrl/results.json'
+    input_file = '/workspace/CenterPoint/work_dirs/immo/cp_5_seed_2hz/results.json'
+    # input_file = "/workspace/CenterPoint/work_dirs/5_nusc_centerpoint_voxelnet_0075voxel_fix_bn_z/eval_on_seed/infos_train_10sweeps_withvelo_filter_True.json"
     output_file = input_file.replace('.json', '_tp.json')
     output_dir = input_file.replace('results.json', '')
     detection_results = load_json(input_file)
+
+    print("TODO need to add this to extraction")
+    # keys = list(detection_results['results'].keys())
+    # key_set = {}
+    # for k in keys:
+    #     if not detection_results['results'][k]:
+    #         del detection_results['results'][k]
+    #         continue
+
+    #     for r in detection_results['results'][k]:
+    #         if isinstance(r['sample_token'], list):
+    #             if r['sample_token'][0] == r['sample_token'][2:]:
+    #                 set_trace()
+    #             r['sample_token'] = r['sample_token'][0]
 
     # Initialize nuScenes
     from nuscenes import NuScenes
     nusc = NuScenes(version='v1.0-trainval', dataroot="data/nuScenes", verbose=True)
 
+    # Lists to hold the keyframe and non-keyframe sample tokens
+    keyframe_tokens = []
+    non_keyframe_tokens = []
+
+    # Loop through the detection results
+    for sample_token in detection_results['results']:        
+        # Try to find the sample in the keyframe (sample) table
+        try:
+            sample_record = nusc.get('sample', sample_token)
+            keyframe_tokens.append(sample_token)
+        except:
+            non_keyframe_tokens.append(sample_token)
+
+
+    # assert len(keyframe_tokens) == 934
+    
     # Classify detections
-    updated_results = classify_detections(detection_results, nusc, 'val', input_file, output_dir)
+    updated_results = classify_detections(detection_results, nusc, 'train', input_file, output_dir)
 
     # Save the updated JSON file
     save_json(updated_results, output_file)

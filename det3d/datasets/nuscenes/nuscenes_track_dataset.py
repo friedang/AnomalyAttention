@@ -37,21 +37,60 @@ import torch
 from torch.utils.data import Dataset, DataLoader
 
 class SceneDataset(Dataset):
-    def __init__(self, scenes_info, track_info):
+    def __init__(self, scenes_info_path=None, track_info=None, gt_scenes_info_path=None, gt_track_info=None, load_chunks_from=None, sample_ratio=None):
         # scenes is a dict where keys are scene names, and values are lists of tensors
-        scenes_info = scenes_info
-        track_info = track_info
-        self.scene_names = list(scenes_info.keys())
-
         self.chunks = []
-        chunk_size = 4
+        self.chunk_size = 5
+        self.dummy = {'translation': [-500, -500, -500], 'size': [-500, -500, -500], 'rotation': [-500, -500, -500, -500],
+                      'sample_token': 'dummy', 'TP': -500, 'num_lidar_pts': -500, 'tracking_id': 'dummy'}
+        self.max_track_len = 41
+        max_scene_size = 2350
+        max_gt_scene_size = 205
+        if load_chunks_from:
+            self.chunks = torch.load(load_chunks_from)
+        else:
+            if scenes_info_path:
+                scenes_info = json.load(open(scenes_info_path, 'r'))
+                track_info = json.load(open(track_info, 'r'))
+                self.scene_names = list(scenes_info.keys())
+                self.fill_chunks(track_info, scenes_info, max_scene_size)
+            if gt_scenes_info_path:
+                gt_scenes_info = json.load(open(gt_scenes_info_path, 'r'))
+                gt_track_info = json.load(open(gt_track_info, 'r'))
+                self.scene_names = list(gt_scenes_info.keys())
+                self.fill_chunks(gt_track_info, gt_scenes_info, max_gt_scene_size)
+            if sample_ratio:
+                torch.manual_seed(random.randint(0, sys.maxsize))
+                total_indices = torch.randperm(len(self.chunks))
+                split = int(sample_ratio * len(self.chunks))
+                self.chunks = [x for _, x in sorted(zip(total_indices, self.chunks))]
+                train_chunk = self.chunks[:split]
+                val_chunk = self.chunks[split:]
+                # train_chunk = self.replace_tensor_values_in_tuples(train_chunk)
+                # val_chunk = self.replace_tensor_values_in_tuples(val_chunk)
+                torch.save(train_chunk, scenes_info_path.replace('scene2trackname.json', 'train_chunks.pt'))
+                torch.save(val_chunk, scenes_info_path.replace('scene2trackname.json', 'val_chunks.pt'))
 
-        dummy = {'translation': [-500, -500, -500], 'size': [-500, -500, -500], 'rotation': [-500, -500, -500, -500],
-                      'sample_token': 'dummy', 'TP': -500, 'num_lidar_pts': -500}
-        max_track_len = 41
-        max_scene_size = 2348
+                print(f"Saved validation chunk for loading to {scenes_info_path.replace('scene2trackname.json', 'val_chunks.pt')}")
+                print("Set current chunks to train chunks.")
+                self.chunks = train_chunk
 
+        self.chunks = self.chunks
+
+    def replace_tensor_values_in_tuples(self, data):
+        # Iterate over the list of tuples
+        for i, (first_tensor, _, last_tensor) in enumerate(data):
+            # Replace -500 with -5 in the first tensor
+            data[i] = (torch.where(first_tensor == -500, torch.tensor(-5), first_tensor),
+                    data[i][1],  # Keep the middle element unchanged
+                    torch.where(last_tensor == -500, torch.tensor(-5), last_tensor))
+            
+        print(f"Number of -5 dummy items in chunks is {len([v for values in data for v in values[0] if v == -5])}")
+        return data
+
+    def fill_chunks(self, track_info, scenes_info, max_scene_size):
         self.scenes = {k: [] for k in self.scene_names}
+        print(f"Number of non dummy items in track_info is {len([v for values in track_info.values() for v in values if v['TP'] != -500])}")
         for name in self.scene_names:
             track_names = scenes_info[name]
             for n in track_names:
@@ -59,21 +98,24 @@ class SceneDataset(Dataset):
             
             if len(self.scenes[name]) < max_scene_size:
                track_len_diff = max_scene_size - len(self.scenes[name])
-               dummy_track = [dummy] * 41
+               dummy_track = [self.dummy] * 41
                for _ in range(track_len_diff):
                    self.scenes[name].append(dummy_track)
-
+        
+        print(f"Number of non dummy items in self.scenes is {len([v for values in self.scenes.values() for k in values for v in k if v['TP'] != -500])}")
         # Convert each scene's list of dicts into a tensor
         for name in self.scenes.keys():
-            scene_data = self.scenes[name]
-            for i in range(0, max_track_len*chunk_size - 1, chunk_size):
-                scene_data = self.scenes[name][0] + self.scenes[name][1] + self.scenes[name][2] + self.scenes[name][3]
-                if all(d == dummy for d in scene_data[i:i + chunk_size]):
+            scene_data = [det for track in self.scenes[name] for det in track]
+            for i in range(0, len(scene_data), self.chunk_size):
+                # filter dummy-only chunks
+                if all(d['TP'] == -500 for d in scene_data[i:i + self.chunk_size]):
                     continue
                 else:
                     self.chunks.append(
-                        self._collate_scene(scene_data[i:i + chunk_size]))
+                        self._collate_scene(scene_data[i:i + self.chunk_size]))
             # self.scenes[name] = self._collate_scene(self.scenes[name])
+                    
+        print(f"Number of non dummy items in chunks is {len([v for values in self.chunks for v in values[1][1] if v != 'dummy'])}")
 
     def _collate_scene(self, scene_data):
         """
@@ -87,10 +129,11 @@ class SceneDataset(Dataset):
         tp = torch.tensor([d['TP'] for d in scene_data], dtype=torch.float32)
         num_lidar_pts = torch.tensor([d['num_lidar_pts'] for d in scene_data], dtype=torch.float32)
         tokens = [d['sample_token'] for d in scene_data]
+        ids = [(d['sample_token'] + '_' + d['tracking_id']) if 'tracking_id' in d.keys() else 'dummy' for d in scene_data]
 
         # Stack all tensors together into one large tensor for the scene
         return (tp.unsqueeze(-1),
-                tokens,
+                (tokens, ids),
                 torch.cat([translations, sizes, rotations, num_lidar_pts.unsqueeze(-1)], dim=-1))
 
     def __len__(self):
@@ -102,16 +145,20 @@ class SceneDataset(Dataset):
         return self.chunks[idx]
     
 
-import json
-scenes_info = json.load(open('/workspace/CenterPoint/work_dirs/immo/cp_5_seed_2hz/scene2trackname_tp.json', "r"))
-track_info = json.load(open('/workspace/CenterPoint/work_dirs/immo/cp_5_seed_2hz/tp_padded_tracks.json', "r"))
+# scenes_info = json.load(open('/workspace/CenterPoint/work_dirs/immo/cp_5_seed_2hz/scene2trackname.json', "r"))
+# track_info = json.load(open('/workspace/CenterPoint/work_dirs/immo/cp_5_seed_2hz/track_info_tp_padded_tracks.json', "r"))
+# gt_scenes_info = json.load(open('/workspace/CenterPoint/work_dirs/immo/cp_5_seed_2hz/gt_scene2trackname_tp.json', "r"))
+# gt_track_info = json.load(open('/workspace/CenterPoint/work_dirs/immo/cp_5_seed_2hz/gt_track_info_tp_padded_tracks.json', "r"))
 
-from ipdb import launch_ipdb_on_exception, set_trace
-with launch_ipdb_on_exception():
-    test = SceneDataset(scenes_info, track_info)
+# chunks = torch.load('/workspace/CenterPoint/work_dirs/immo/cp_5_seed_2hz/chunks.pt')
+# from ipdb import launch_ipdb_on_exception, set_trace
+# with launch_ipdb_on_exception():
+#     test = SceneDataset(scenes_info, track_info, gt_scenes_info, gt_track_info)
+#     set_trace()
+#     print(1)
 
 
-@DATASETS.register_module
+# @DATASETS.register_module
 class NuScenesTrackDataset(PointCloudDataset):
     NumPointFeatures = 5  # x, y, z, intensity, ring_index
 
