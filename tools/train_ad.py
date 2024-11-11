@@ -204,9 +204,9 @@ def train(rank, world_size, args):
     if args.track_pc:
         model = Track2PCTrackMLPClassifier(input_size=11, hidden_size=128, num_layers=3)
     elif args.pc:
-        model = PCTrackMLPClassifier(input_size=12, hidden_size=128, num_layers=3)
+        model = PCTrackMLPClassifier(input_size=11, hidden_size=128, num_layers=3)
     else:
-        model = TrackMLPClassifier(input_size=12, hidden_size=128, num_layers=3)
+        model = TrackMLPClassifier(input_size=11, hidden_size=128, num_layers=3)
 
     device = torch.device(f'cuda:{rank}' if (not args.cpu) and torch.cuda.is_available() else 'cpu')
     model.to(device)

@@ -58,7 +58,7 @@ class Track2PCTrackMLPClassifier(nn.Module):
         # ])
 
         # Output layer (binary classification)
-        self.output_layer = nn.Linear(hidden_size * 2, 1)
+        self.output_layer = nn.Linear(hidden_size * 3, 1)
 
         self._initialize_weights()
 
@@ -84,9 +84,9 @@ class Track2PCTrackMLPClassifier(nn.Module):
         pc_feat, _, _ = self.pc_en(pc)
 
         # PointNet
-        # pc = F.relu(self.bn1(self.fc1(pc_feat)))
-        # pc = F.relu(self.bn2(self.dropout(self.fc2(pc))))
-        # pc = self.fc3(pc)
+        pc = F.relu(self.bn1(self.fc1(pc_feat)))
+        pc = F.relu(self.bn2(self.dropout(self.fc2(pc))))
+        pc = self.fc3(pc)
 
         # Track&PC Features
         if batch_size > 1:
@@ -112,15 +112,15 @@ class Track2PCTrackMLPClassifier(nn.Module):
             # x = self.dropout_layer(x)
 
         # Output layer
-        # if x_in.shape[0] != pc.shape[0]:
-        #     diff = int(x_in.shape[0] / pc.shape[0])
-        #     pc = pc.repeat(diff, 1)
+        if x_in.shape[0] != pc.shape[0]:
+            diff = int(x_in.shape[0] / pc.shape[0])
+            pc = pc.repeat(diff, 1)
 
         if x_in.shape[0] != track_pc.shape[0]:
             diff = int(x_in.shape[0] / track_pc.shape[0])
             track_pc = track_pc.repeat(diff, 1)
         
-        final_out = torch.cat([x_in, track_pc], axis=1) # torch.cat([x_in, pc, track_pc], axis=1)
+        final_out = torch.cat([x_in, pc, track_pc], axis=1) # torch.cat([x_in, track_pc], axis=1) 
         x = self.output_layer(final_out)
 
         # Reshape output to (batch_size, num_tracks, 1)

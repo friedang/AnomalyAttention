@@ -148,7 +148,7 @@ def update_results(cp_det_path, results_path):
 
     data['results'] = res
 
-    with open(cp_det_path.replace('cp_results', 'merged_results'), 'w') as f:
+    with open(results_path.replace('inference_results', 'merged_results'), 'w') as f:
         json.dump(data, f)
 
 def extract_pseudo_gt(data_path, updates_path):
@@ -225,7 +225,7 @@ with launch_ipdb_on_exception():
     # merge_2hz_and_20hz_files(keyframe_json_path, non_keyframe_json_path, output_json_path)
 
     update_results(cp_det_path='/workspace/CenterPoint/work_dirs/ad_mlp_05/Resnet_baseline_with_Focal_gt/val_aug/new_nusc_validation/cp_results.json', 
-                   results_path='/workspace/CenterPoint/work_dirs/ad_mlp_05/Resnet_baseline_with_Focal_gt/val_aug/new_nusc_validation/inference_results.json')
+                   results_path='/workspace/CenterPoint/work_dirs/ad_pc_mlp_05/val_aug/nusc_validation/inference_results.json')
 
     ## merge seed and pseudo
     # data = update_data(pickle_files[0], pickle_files[1])

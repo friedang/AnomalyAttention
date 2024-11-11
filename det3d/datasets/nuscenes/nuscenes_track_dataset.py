@@ -139,9 +139,9 @@ class SceneDataset(Dataset):
                 gt_track_info = json.load(open(gt_track_info, 'r'))
                 self.scene_names = list(gt_scenes_info.keys())
                 # for _ in range(2):
-                # self.fill_chunks(gt_track_info, gt_scenes_info, max_gt_scene_size, gt=True)
-                # for _ in range(5):
-                #     self.fill_chunks(gt_track_info, gt_scenes_info, max_gt_scene_size, gt=True, augment=True)
+                self.fill_chunks(gt_track_info, gt_scenes_info, max_gt_scene_size, gt=True)
+                for _ in range(5):
+                    self.fill_chunks(gt_track_info, gt_scenes_info, max_gt_scene_size, gt=True, augment=True)
 
             if sample_ratio:
                 # TODO Move this to the top and sample scene names instead
@@ -224,60 +224,6 @@ class SceneDataset(Dataset):
                                 scene_data.append(self.dummy)
                         self.chunks.append(self._collate_scene(scene_data[i:i + self.chunk_size], gt=gt))
 
-        print(f"Number of non dummy items in chunks is {len([v for values in self.chunks for v in values[1][1] if v != 'dummy'])}")
-
-    def replace_tensor_values_in_tuples(self, data):
-        # Iterate over the list of tuples
-        for i, (first_tensor, _, last_tensor) in enumerate(data):
-            # Replace -500 with -5 in the first tensor
-            data[i] = (torch.where(first_tensor == -500, torch.tensor(-5), first_tensor),
-                       data[i][1],  # Keep the middle element unchanged
-                       torch.where(last_tensor == -500, torch.tensor(-5), last_tensor))
-            
-        print(f"Number of -5 dummy items in chunks is {len([v for values in data for v in values[0] if v == -5])}")
-        return data
-
-    # def fill_chunks(self, track_info, scenes_info, max_scene_size, gt=False):
-        self.scenes = {k: [] for k in self.scene_names}
-        print(f"Number of non dummy items in track_info is {len([v for values in track_info.values() for v in values if v['TP'] != -500])}")
-        for name in self.scene_names:
-            track_names = scenes_info[name]
-            for n in track_names:
-                self.scenes[name].append(track_info[n])
-            
-            if len(self.scenes[name]) < max_scene_size:
-               track_len_diff = max_scene_size - len(self.scenes[name])
-               dummy_track = [self.dummy] * 41
-               for _ in range(track_len_diff):
-                   self.scenes[name].append(dummy_track)
-        
-        print(f"Number of non dummy items in self.scenes is {len([v for values in self.scenes.values() for k in values for v in k if v['TP'] != -500])}")
-        # Convert each scene's list of dicts into a tensor
-        for name in self.scenes.keys():
-            scene_data = [det for track in self.scenes[name] for det in track]
-
-            if all(d['TP'] == -500 for d in scene_data):
-                continue
-            elif self.chunk_size == self.max_track_len:
-                if len(scene_data) <= self.chunk_size:
-                    len_diff  = self.chunk_size - len(scene_data)
-                    for i in range(len_diff):
-                        scene_data.append(self.dummy)
-                self.chunks.append(self._collate_scene(scene_data, gt))
-                continue
-            
-            for i in range(0, len(scene_data), self.chunk_size):
-                # filter dummy-only chunks
-                if all(d['TP'] == -500 for d in scene_data[i:i + self.chunk_size]):
-                    continue
-                else:
-                    if len(scene_data[i:i + self.chunk_size]) < self.chunk_size:
-                        len_diff  = self.chunk_size - len(scene_data[i:i + self.chunk_size])
-                        for i in range(len_diff):
-                            scene_data.append(self.dummy)
-                    self.chunks.append(
-                        self._collate_scene(scene_data[i:i + self.chunk_size], gt))
-                    
         print(f"Number of non dummy items in chunks is {len([v for values in self.chunks for v in values[1][1] if v != 'dummy'])}")
 
     def _collate_scene(self, scene_data, gt=False):
