@@ -451,7 +451,7 @@ class NuScenesDataset(PointCloudDataset):
             plt.close()
 
 
-    def evaluation(self, detections, output_dir=None, testset=False, train=False, res_path=None):
+    def evaluation(self, detections, output_dir=None, testset=False, train=False, res_path=None, filter_ad=False):
         eval_set_map = {
             "v1.0-mini": "mini_val",
             "v1.0-trainval": "train" if train else "val",
@@ -467,9 +467,7 @@ class NuScenesDataset(PointCloudDataset):
             else:
                 mapped_class_names.append(n)
 
-        if res_path:
-            output_dir = res_path.replace('results.json', '')
-        else:
+        if not res_path:
             if not testset:
                 dets = []
                 gt_annos = self.ground_truth_annotations
@@ -570,6 +568,7 @@ class NuScenesDataset(PointCloudDataset):
                 res_path,
                 eval_set_map[self.version],
                 output_dir,
+                filter_ad
             )
 
             with open(Path(output_dir) / "metrics_summary.json", "r") as f:

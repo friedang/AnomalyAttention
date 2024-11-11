@@ -448,9 +448,9 @@ class DetectionBox(EvalBox):
                    ego_translation=(0.0, 0.0, 0.0) if 'ego_translation' not in content
                    else tuple(content['ego_translation']),
                    num_pts=-1 if 'num_pts' not in content else int(content['num_pts']),
-                   detection_name=content['detection_name'],
+                   detection_name=content['detection_name'] if not isinstance(content['detection_name'], list) else content['detection_name'][0],
                    detection_score=-1.0 if 'detection_score' not in content else float(content['detection_score']),
-                   attribute_name=content['attribute_name'])
+                   attribute_name=content['attribute_name'] if not isinstance(content['attribute_name'], list) else content['attribute_name'][0],)
 
 
 class DetectionMetricDataList:

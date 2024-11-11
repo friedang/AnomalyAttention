@@ -122,15 +122,24 @@ class EvalBoxes:
         return {key: [box.serialize() for box in boxes] for key, boxes in self.boxes.items()}
 
     @classmethod
-    def deserialize(cls, content: dict, box_cls):
+    def deserialize(cls, content: dict, box_cls, filter_ad=False):
         """
         Initialize from serialized content.
         :param content: A dictionary with the serialized content of the box.
         :param box_cls: The class of the boxes, DetectionBox or TrackingBox.
         """
         eb = cls()
+        # import ipdb; ipdb.set_trace()
         for sample_token, boxes in content.items():
-            eb.add_boxes(sample_token, [box_cls.deserialize(box) for box in boxes])
+            # if boxes == []:
+            #     continue
+            first_value = boxes[0]
+            ad_check = True if filter_ad and 'TP' in first_value.keys() else False
+            if ad_check:
+                # import ipdb; ipdb.set_trace()
+                eb.add_boxes(sample_token, [box_cls.deserialize(box) for box in boxes if box['TP'] == 1])
+            else:
+                eb.add_boxes(sample_token, [box_cls.deserialize(box) for box in boxes])
         return eb
 
 

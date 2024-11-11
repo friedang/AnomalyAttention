@@ -238,26 +238,35 @@ def classify_detections(detection_results, nusc, eval_split, result_path, output
             else:
                 result['TP'] = 0
 
+    tps = [t for d in detection_results['results'].values() for t in d if t['TP']==1]
+    fps = [t for d in detection_results['results'].values() for t in d if t['TP']==0]
+
+    print(f"Number of TPs are {tps}")
+    print(f"Number of FPs are {fps}")
+
     return detection_results
 
 
 def main():
     # Load the JSON file
-    input_file = '/workspace/CenterPoint/work_dirs/immo/cp_5_seed_2hz/results.json'
-    # input_file = "/workspace/CenterPoint/work_dirs/5_nusc_centerpoint_voxelnet_0075voxel_fix_bn_z/eval_on_seed/infos_train_10sweeps_withvelo_filter_True.json"
+    # input_file = '/workspace/CenterPoint/work_dirs/ad_mlp_05/Resnet_baseline_with_Focal_gt/nusc_validation/immo_results.json'
+    input_file = "/workspace/CenterPoint/work_dirs/immo/cp_valset/results.json"
     output_file = input_file.replace('.json', '_tp.json')
     output_dir = input_file.replace('results.json', '')
     detection_results = load_json(input_file)
 
     print("TODO need to add this to extraction")
-    # keys = list(detection_results['results'].keys())
-    # key_set = {}
-    # for k in keys:
-    #     if not detection_results['results'][k]:
-    #         del detection_results['results'][k]
-    #         continue
 
+    keys = list(detection_results['results'].keys())
+    # key_set = {}
+    for k in keys:
+        if not detection_results['results'][k]:
+            del detection_results['results'][k]
+            continue
+        
+    # For non key frames
     #     for r in detection_results['results'][k]:
+    #         r['TP'] = -500
     #         if isinstance(r['sample_token'], list):
     #             if r['sample_token'][0] == r['sample_token'][2:]:
     #                 set_trace()
@@ -272,19 +281,23 @@ def main():
     non_keyframe_tokens = []
 
     # Loop through the detection results
-    for sample_token in detection_results['results']:        
-        # Try to find the sample in the keyframe (sample) table
-        try:
-            sample_record = nusc.get('sample', sample_token)
-            keyframe_tokens.append(sample_token)
-        except:
-            non_keyframe_tokens.append(sample_token)
+    # for sample_token in detection_results['results']:        
+    #     # Try to find the sample in the keyframe (sample) table
+    #     try:
+    #         sample_record = nusc.get('sample', sample_token)
+    #         keyframe_tokens.append(sample_token)
+    #     except:
+    #         non_keyframe_tokens.append(sample_token)
 
 
     # assert len(keyframe_tokens) == 934
     
     # Classify detections
     updated_results = classify_detections(detection_results, nusc, 'train', input_file, output_dir)
+    print(f"Number of non dummy items in dets is {len([v for values in detection_results['results'].values() for v in values if v['TP'] != -500])}")
+    print(f"Number of TP in dets is {len([v for values in detection_results['results'].values() for v in values if v['TP'] == 1])}")
+    print(f"Number of FP in dets is {len([v for values in detection_results['results'].values() for v in values if v['TP'] == 0])}")
+    updated_results = detection_results
 
     # Save the updated JSON file
     save_json(updated_results, output_file)

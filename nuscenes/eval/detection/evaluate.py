@@ -48,7 +48,8 @@ class DetectionEval:
                  result_path: str,
                  eval_set: str,
                  output_dir: str = None,
-                 verbose: bool = True):
+                 verbose: bool = False,
+                 filter_ad=False):
         """
         Initialize a DetectionEval object.
         :param nusc: A NuScenes object.
@@ -79,7 +80,7 @@ class DetectionEval:
         if verbose:
             print('Initializing nuScenes detection evaluation')
         self.pred_boxes, self.meta = load_prediction(self.result_path, self.cfg.max_boxes_per_sample, DetectionBox,
-                                                     verbose=verbose)
+                                                     verbose=verbose, filter_ad=filter_ad)
         sample_tokens = list(set(self.pred_boxes.sample_tokens)) if eval_set == 'train' else None
         self.gt_boxes = load_gt(self.nusc, self.eval_set, DetectionBox, verbose=verbose, sample_tokens=sample_tokens)
         

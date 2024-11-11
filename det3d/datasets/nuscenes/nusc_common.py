@@ -717,7 +717,7 @@ def create_nuscenes_infos(root_path, version="v1.0-trainval", nsweeps=10, filter
             pickle.dump(val_nusc_infos, f)
 
 
-def eval_main(nusc, eval_version, res_path, eval_set, output_dir, ad=True):
+def eval_main(nusc, eval_version, res_path, eval_set, output_dir, ad=True, filter_ad=False):
     # nusc = NuScenes(version=version, dataroot=str(root_path), verbose=True)
     if ad:
         this_dir = os.path.dirname(os.path.abspath(__file__))
@@ -737,5 +737,6 @@ def eval_main(nusc, eval_version, res_path, eval_set, output_dir, ad=True):
         eval_set=eval_set,
         output_dir=output_dir,
         verbose=True,
+        filter_ad=False
     )
     metrics_summary = nusc_eval.main(plot_examples=10,)

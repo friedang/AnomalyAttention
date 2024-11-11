@@ -46,6 +46,29 @@ def tracking_to_detection(track_path):
         json.dump(data, f)
 
 
+def detection_to_tracking(track_path):
+    with open(track_path, "r") as f:
+        data = json.load(f)
+
+    results = data['results']
+    for k, v in results.items():
+        detections = []
+        for det in v:
+            det['tracking_name'] = det['detection_name']
+            det['tracking_id'] = det['detection_name'] + '_' + det['sample_token']
+            detections.append(det)
+        
+        results[k] = detections
+    
+    data['results'] = results
+
+    # base_data = json.load(open('/workspace/CenterPoint/work_dirs/5_nusc_centerpoint_voxelnet_0075voxel_fix_bn_z/eval_on_seed/infos_train_10sweeps_withvelo_filter_True.json', 'r'))
+    # data['results'] = {k: v for k,v in data['results'].items() if k in base_data['results']}
+
+    with open(track_path.replace('tracking_result', 'track_to_det_results'), "w") as f:
+        json.dump(data, f)
+
+
 def update_data(data_path, updates_path):
     with open(data_path, "rb") as f:
         data = pkl.load(f)
@@ -77,6 +100,57 @@ def update_data(data_path, updates_path):
     return data
 
 
+def update_results(cp_det_path, results_path):
+    with open(cp_det_path, "r") as f:
+        data = json.load(f)
+
+    with open(results_path, "r") as f:
+        results = json.load(f)
+
+    res = results if 'results' not in results.keys() else results['results']
+    length = [1 for t in res.values() if t != []]
+    print("Before update:")
+    print(f"Number of frames with detections is {len(length)}")
+
+    print(f"Number of Detections before filtering is {len([v for values in res.values() for v in values])}") # if v['TP'] == 1])}")
+    counter = 0
+    for k, v in res.items():
+        if v == []:
+            print("Add original result")
+            res[k] = data['results'][k]
+            continue
+        # if v != []:
+        #     data['results'][k] = v
+            
+        # filter AD
+        vals = []
+        fp = []
+        for val in v:
+            if val['TP'] == 1:
+                vals.append(val)
+            else:
+                fp.append(val)
+        
+        counter += len(fp)
+        res[k] = vals    
+    
+    print(f"Filtered out {counter} Detections labeled as FP")
+    print(f"Number of Detections after filtering is {len([v for values in res.values() for v in values])}")
+
+    for k in data['results'].keys():
+        if k not in res.keys():
+            res[k] = data['results'][k]
+
+    length = [1 for t in res.values() if t != []]
+    print("After update:")
+    print(f"Number of frames with detections is {len(length)}")
+    print(f"Number of Detections after updating is {len([v for values in res.values() for v in values])}")
+
+    data['results'] = res
+
+    with open(cp_det_path.replace('cp_results', 'merged_results'), 'w') as f:
+        json.dump(data, f)
+
 def extract_pseudo_gt(data_path, updates_path):
     with open(data_path, "rb") as f:
         data = pkl.load(f)
@@ -100,7 +174,7 @@ def extract_pseudo_gt(data_path, updates_path):
     return pseudo_gt
 
 
-def merge_json_files(keyframe_file, non_keyframe_file, output_file):
+def merge_2hz_and_20hz_files(keyframe_file, non_keyframe_file, output_file):
     # Load 2Hz (keyframes) results
     with open(keyframe_file, 'r') as f:
         keyframe_data = json.load(f)
@@ -137,25 +211,28 @@ pickle_files = ['./data/nuScenes/infos_train_10sweeps_withvelo_filter_True.pkl',
 output_dir = pickle_files[1].replace('prediction_1.pkl', '')
 output_file_path = os.path.join(output_dir, 'seed_and_pseudo_gt.pkl')
 
-keyframe_json_path = "/workspace/CenterPoint/work_dirs/immo/cp_5_seed_2hz/results.json"
-non_keyframe_json_path = "/workspace/CenterPoint/work_dirs/immo/results/results.json"
-output_json_path = "/workspace/CenterPoint/work_dirs/immo/results/merged_results.json"
+keyframe_json_path = "/workspace/CenterPoint/work_dirs/immo/cp_5_seed_2hz/results_tp.json"
+non_keyframe_json_path = "/workspace/CenterPoint/work_dirs/immo/cp_5_seed_20hz/results_tp.json"
+output_json_path = "/workspace/CenterPoint/work_dirs/immo/cp_5_seed_2hz/merged_results_tp.json"
 
 # Merge data and save
 from ipdb import launch_ipdb_on_exception, set_trace
 with launch_ipdb_on_exception():
-    # tracking_to_detection("/workspace/CenterPoint/work_dirs/immo/results/merged_results.json")
+    # tracking_to_detection('/workspace/CenterPoint/work_dirs/immo/results/results.json') #inference_results
     
-    # merge_json_files(keyframe_json_path, non_keyframe_json_path, output_json_path)
+    # detection_to_tracking("/workspace/CenterPoint/work_dirs/immo/results/results.json")
+    
+    # merge_2hz_and_20hz_files(keyframe_json_path, non_keyframe_json_path, output_json_path)
 
-
+    update_results(cp_det_path='/workspace/CenterPoint/work_dirs/ad_mlp_05/Resnet_baseline_with_Focal_gt/val_aug/new_nusc_validation/cp_results.json', 
+                   results_path='/workspace/CenterPoint/work_dirs/ad_mlp_05/Resnet_baseline_with_Focal_gt/val_aug/new_nusc_validation/inference_results.json')
 
     ## merge seed and pseudo
-    data = update_data(pickle_files[0], pickle_files[1])
+    # data = update_data(pickle_files[0], pickle_files[1])
 
     ## extract pseudo gt for evaluation/validation
     # # output_file_path = os.path.join(output_dir, 'gt_for_pseudo.pkl')
     # # data = extract_pseudo_gt(pickle_files[0], pickle_files[1])
 
-    with open(output_file_path, 'wb') as file:
-        pkl.dump(data, file)
+    # with open(output_file_path, 'wb') as file:
+    #     pkl.dump(data, file)

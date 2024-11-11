@@ -18,7 +18,7 @@ from nuscenes.utils.geometry_utils import points_in_box
 from nuscenes.utils.splits import create_splits_scenes
 
 
-def load_prediction(result_path: str, max_boxes_per_sample: int, box_cls, verbose: bool = False) \
+def load_prediction(result_path: str, max_boxes_per_sample: int, box_cls, verbose: bool = False, filter_ad=False) \
         -> Tuple[EvalBoxes, Dict]:
     """
     Loads object predictions from file.
@@ -36,7 +36,7 @@ def load_prediction(result_path: str, max_boxes_per_sample: int, box_cls, verbos
                               'See https://www.nuscenes.org/object-detection for more information.'
 
     # Deserialize results and get meta data.
-    all_results = EvalBoxes.deserialize(data['results'], box_cls)
+    all_results = EvalBoxes.deserialize(data['results'], box_cls, filter_ad)
     meta = data['meta']
     if verbose:
         print("Loaded results from {}. Found detections for {} samples."
@@ -176,7 +176,8 @@ def load_gt(nusc: NuScenes, eval_split: str, box_cls, verbose: bool = False, sam
             else:
                 raise NotImplementedError('Error: Invalid box_cls %s!' % box_cls)
 
-        print(f"Found {len(sample_boxes)} sample boxes for GT. And {len(nk_tokens)} non-keyframes")
+        # if verbose:
+        #     print(f"Found {len(sample_boxes)} sample boxes for GT. And {len(nk_tokens)} non-keyframes")
         all_annotations.add_boxes(sample_token, sample_boxes)
 
     if nk_tokens:

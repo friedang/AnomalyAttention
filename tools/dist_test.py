@@ -70,6 +70,7 @@ def parse_args():
     parser.add_argument("--testset", action="store_true")
     parser.add_argument("--load-preds", type=str, default=None)
     parser.add_argument("--train", default=False, action="store_true")
+    parser.add_argument("--filter_ad", default=False, action="store_true")
 
     args = parser.parse_args()
     if "LOCAL_RANK" not in os.environ:
@@ -220,7 +221,9 @@ def main(args):
 
     save_pred(predictions, args.work_dir)
 
-    result_dict, _ = dataset.evaluation(copy.deepcopy(predictions), output_dir=args.work_dir, testset=args.testset, train=args.train)
+    result_dict, _ = dataset.evaluation(copy.deepcopy(predictions), output_dir=args.work_dir,
+                                        testset=args.testset, train=args.train,
+                                        filter_ad=args.filter_ad)
 
     if result_dict is not None:
         for k, v in result_dict["results"].items():

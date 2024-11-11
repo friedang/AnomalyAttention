@@ -188,29 +188,29 @@ data = dict(
         load_indices=load_indices,
         sample_ratio=sample_ratio,
     ),
-    val=dict(
-        type=dataset_type,
-        root_path=data_root,
-        info_path=val_anno,
-        test_mode=True,
-        ann_file=val_anno,
-        nsweeps=nsweeps,
-        class_names=class_names,
-        pipeline=test_pipeline,
-    ),
-    # pseudo/train val
     # val=dict(
     #     type=dataset_type,
     #     root_path=data_root,
-    #     info_path=train_anno,
-    #     ann_file=train_anno,
+    #     info_path=val_anno,
     #     test_mode=True,
+    #     ann_file=val_anno,
     #     nsweeps=nsweeps,
     #     class_names=class_names,
     #     pipeline=test_pipeline,
-    #     load_indices=load_indices,
-    #     sample_ratio=sample_ratio,
     # ),
+    # pseudo/train val
+    val=dict(
+        type=dataset_type,
+        root_path=data_root,
+        info_path=train_anno,
+        ann_file=train_anno,
+        test_mode=True,
+        nsweeps=nsweeps,
+        class_names=class_names,
+        pipeline=test_pipeline,
+        load_indices=load_indices,
+        sample_ratio=sample_ratio,
+    ),
     test=dict(
         type=dataset_type,
         root_path=data_root,
@@ -263,6 +263,6 @@ import os
 import shutil
 
 config_file = __file__
-destination_file = os.path.join(work_dir, os.path.basename(config_file))
-if not os.path.exists(destination_file):
-    shutil.copy(config_file, destination_file)
+# destination_file = os.path.join(work_dir, os.path.basename(config_file))
+# if not os.path.exists(destination_file):
+#     shutil.copy(config_file, destination_file)

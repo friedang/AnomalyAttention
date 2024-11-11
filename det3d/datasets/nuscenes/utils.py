@@ -12,6 +12,7 @@ from pyquaternion import Quaternion
 from nuscenes.nuscenes import NuScenes
 from nuscenes.utils.data_classes import LidarPointCloud
 from nuscenes.utils.geometry_utils import transform_matrix, points_in_box
+from nuscenes.utils.splits import create_splits_scenes
 from nuscenes.eval.detection.data_classes import DetectionBox
 from nuscenes.eval.detection.utils import category_to_detection_name
 from nuscenes.eval.common.data_classes import EvalBoxes
@@ -29,6 +30,8 @@ class NpEncoder(json.JSONEncoder):
             return float(obj)
         if isinstance(obj, np.ndarray):
             return obj.tolist()
+        if isinstance(obj, torch.Tensor):
+            return float(obj)
         return super(NpEncoder, self).default(obj)
 
 
@@ -95,6 +98,8 @@ def create_tracks(detection_results, nusc):
 
     tracks = {} # box, tp_label, sample_token
 
+    pointcloud_cache = {}
+
     for sample_token, preds in tqdm.tqdm(detection_results['results'].items()):
         try:
             sample = nusc.get('sample', sample_token)
@@ -106,37 +111,32 @@ def create_tracks(detection_results, nusc):
             t_id = result['tracking_id']
             if t_id not in tracks.keys():
                 tracks[t_id] = []
-            
-            # box = result['translation'] + result['size'] + result['rotation']
-            # box = torch.Tensor(box)
-
-            c = 0
             i = t_id
-            # while len(tracks[i]) >= 5:
-            #     if i.endswith(f"_{c}"):
-            #         c += 1
-            #         i = i[:-1] + f"{c}"
-            #     else:
-            #         i = i[:-1] + f"_{c}"
+
+            if sample_token not in pointcloud_cache:
+                if sample:
+                    pointcloud_path = Path('/workspace/CenterPoint/work_dirs/PCs_npy/train') / f"{sample_token}.npy"
+                    pointcloud = np.load(str(pointcloud_path))
+                    sd_record = nusc.get('sample_data', sample['data']['LIDAR_TOP'])
+                else:
+                    sd_record = nusc.get('sample_data', result['lidar_token'])
+                    pointcloud_path = os.path.join(nusc.dataroot, sd_record['filename'])
+                    pointcloud = LidarPointCloud.from_file(pointcloud_path)
+                    pointcloud = cp.asarray(pointcloud.points.T)
+                    pointcloud = farthest_point_sampling(pointcloud, num_samples=5000).get()
                 
-            #     if i not in tracks.keys():
-            #         tracks[i] = []
+                pointcloud_cache[sample_token] = pointcloud
+
+            pointcloud = pointcloud_cache[sample_token]
+            cs_record = nusc.get('calibrated_sensor', sd_record['calibrated_sensor_token'])
+            pose_record = nusc.get('ego_pose', sd_record['ego_pose_token'])
             
-            if sample:
-                pointcloud_path = Path('/workspace/CenterPoint/work_dirs/PCs_npy/train') / f"{sample_token}.npy"
-                pointcloud = np.load(str(pointcloud_path))
+            box = EvalBoxes.deserialize({result['sample_token']: [result]}, DetectionBox)
+            box = list(box.boxes.values())
+            box_in_sensor = boxes_to_sensor(box[0], pose_record, cs_record)[0]
+            points = sum(points_in_box(box_in_sensor, pointcloud[:, :3].T))
 
-                sd_record = nusc.get('sample_data', sample['data']['LIDAR_TOP'])
-                cs_record = nusc.get('calibrated_sensor', sd_record['calibrated_sensor_token'])
-                pose_record = nusc.get('ego_pose', sd_record['ego_pose_token'])
-                
-                box = EvalBoxes.deserialize({result['sample_token']: [result]}, DetectionBox)
-                box = list(box.boxes.values())
-                box_in_sensor = boxes_to_sensor(box[0], pose_record, cs_record)[0]
-                points = sum(points_in_box(box_in_sensor, pointcloud[:, :3].T))
-
-                result['num_lidar_pts'] = points
-
+            result['num_lidar_pts'] = points
             tracks[i].append(
                 result)
                 # (box, result['TP'], sample_token))
@@ -188,10 +188,10 @@ def fix_immortal_detections(file_path):
             del data['results'][k]
             continue
 
-        for i in range(len(data['results'][k])):
-            if isinstance(r['sample_token'], list):
-                data['results'][k][i]['lidar_token'] = k
-                del data['results'][k][i]['sample_token']
+        for r in data['results'][k]:
+            # if isinstance(r['sample_token'], list):
+            r['lidar_token'] = k
+                # del r['sample_token']
 
     save_json(data, file_path)
 
@@ -215,7 +215,7 @@ def convert_pc_npy(output_directory, nusc, tokens):
 def extract_gt_tracks(nusc: NuScenes, sample_tokens: List[str]) -> Dict[str, List[Dict]]:
     gt_tracks = {}
 
-    for sample_token in sample_tokens:
+    for sample_token in tqdm.tqdm(sample_tokens):
         sample = nusc.get('sample', sample_token)
         ann_tokens = sample['anns']
         sample_annotations = [nusc.get('sample_annotation', t) for t in ann_tokens]
@@ -238,6 +238,7 @@ def extract_gt_tracks(nusc: NuScenes, sample_tokens: List[str]) -> Dict[str, Lis
             #         gt_tracks[i] = []
             
             annotation['TP'] = 1
+            annotation['tracking_id'] = instance_token
             # box = {
             #     'translation': annotation['translation'],
             #     'size': annotation['size'],
@@ -296,7 +297,8 @@ def padd_scene_tracks(nusc, scene_track_map, tracks):
     dummy = {'translation': [-500, -500, -500], 'size': [-500, -500, -500], 'rotation': [-500, -500, -500, -500],
              'sample_token': 'dummy', 'TP': -500, 'num_lidar_pts': -500, 'tracking_id': 'dummy'}
     max_track_len = 41
-
+    
+    print("Padding scene tracks")
     for scene in tqdm.tqdm(nusc.scene):
         if scene['name'] not in scene_track_map.keys():
             continue
@@ -344,59 +346,78 @@ def get_scene_from_lidar(nusc, lidar_token):
 def create_scene_track_mapping(nusc, scene_names, tracks):
     scene_mapping = {n: [] for n in scene_names}
     
-    for k, v in tracks.items():
+    print("Create Scene mapping")
+    for k, v in tqdm.tqdm(tracks.items()):
         first_detection = list(v)[0]
         if 'sample_token' in first_detection.keys():
             name = get_scene_from_sample(nusc, first_detection['sample_token'])
-            scene_mapping[name].append(k)
         else:
+            print(1)
             name = get_scene_from_lidar(nusc, first_detection['lidar_token'])
-            scene_mapping[name].append(k)
+
+        if name not in scene_names:
+            continue
+        scene_mapping[name].append(k)
+
+    lengths = [len(lst) for lst in scene_mapping.values()]
+    print(f"Minimum number of tracks in scene is {min(lengths)} and Maximum is {max(lengths)}")
 
     return scene_mapping
 
 
 def main():
     # Load the JSON file
-    input_file = '/workspace/CenterPoint/work_dirs/immo/cp_5_seed_2hz/results_tp.json' # immo/results_max_pass_ctrl/results_tp.json'
-    # output_file = input_file.replace('.json', '_tp.json')
-    # output_dir = input_file.replace('results.json', '')
+    hz20 = False
+    gt = False
+    extract_pcs = False
+    val = True
+    input_file = '/workspace/CenterPoint/work_dirs/immo/cp_valset/results_tp.json' # '/workspace/CenterPoint/work_dirs/immo/cp_5_seed_20hz/merged_results_tp.json'
 
     # for 20 Hz
     # TODO for merged_results: run fix, extract pointclouds to npy for NK frames, adjust number of lidar points for NK
-    # fix_immortal_detections(input_file)
+    if hz20:
+        fix_immortal_detections(input_file)
     
     nusc = NuScenes(version='v1.0-trainval', dataroot="data/nuScenes", verbose=True)
 
-    # detection_results = load_json(input_file)
-    # p_tracks = create_tracks(detection_results, nusc)
-    # save_json(p_tracks, input_file.replace('results', 'track_info'), cls=NpEncoder)
+    detection_results = load_json(input_file)
 
+    # remove empty preds
+    ks = detection_results['results'].keys()
+    for k in ks:
+        if detection_results['results'][k] == [] or detection_results['results'][k] == [[]]:
+            del detection_results['results'][k]
+
+    # set_trace()
     ## Save pointclouds as npy
-    # convert_pc_npy(output_directory='/workspace/CenterPoint/work_dirs/PCs_npy/train', nusc, tokens)
+    if extract_pcs:
+        tokens = detection_results['results'].keys()
+        convert_pc_npy(output_directory='/workspace/CenterPoint/work_dirs/PCs_npy/train', nusc=nusc, tokens=tokens)
+
+    p_tracks = create_tracks(detection_results, nusc)
+    save_json(p_tracks, input_file.replace('results', 'track_info'), cls=NpEncoder)
 
     ## Create GT tracks
-    # tokens = list(detection_results['results'].keys())
-    # gt_tracks = extract_gt_tracks(nusc, tokens)
-    # save_json(gt_tracks, input_file.replace('results', 'gt_track_info'), cls=NpEncoder)
+    if gt:
+        tokens = list(detection_results['results'].keys())
+        gt_tracks = extract_gt_tracks(nusc, tokens)
+        save_json(gt_tracks, input_file.replace('results', 'gt_track_info'), cls=NpEncoder)
 
-    tracks = load_json('/workspace/CenterPoint/work_dirs/immo/cp_5_seed_2hz/gt_track_info_tp.json')
     ## scene to track mapping
-    # input_file = '/workspace/CenterPoint/work_dirs/immo/cp_5_seed_2hz/track_info_tp.json'
-    # scene_names = torch.load('/workspace/CenterPoint/work_dirs/5_nusc_centerpoint_voxelnet_0075voxel_fix_bn_z/train_indices.pth')
-    # tracks = load_json(input_file)
-    # scene_mapping = create_scene_track_mapping(nusc, scene_names, tracks)
-    # save_json(scene_mapping, input_file.replace('track_info', 'scene2trackname'))
-    # save_json(scene_mapping, input_file.replace('track_info', 'gt_scene2trackname'))
+    if gt:
+        input_file = input_file.replace('results', 'gt_track_info')
+    else:
+        input_file = input_file.replace('results', 'track_info')
+    scene_names = create_splits_scenes()['val'] if val else torch.load('/workspace/CenterPoint/work_dirs/5_nusc_centerpoint_voxelnet_0075voxel_fix_bn_z/train_indices.pth')
+    tracks = load_json(input_file)
+    scene_mapping = create_scene_track_mapping(nusc, scene_names, tracks)
+    save_json(scene_mapping, input_file.replace('track_info_tp', 'scene2trackname'))
 
-
-    # input_file = '/workspace/CenterPoint/work_dirs/immo/cp_5_seed_2hz/scene2trackname_tp.json'
-    input_file = '/workspace/CenterPoint/work_dirs/immo/cp_5_seed_2hz/gt_scene2trackname_tp.json'
-    map_scene_track = load_json(input_file)
-    # tracks = load_json('/workspace/CenterPoint/work_dirs/immo/cp_5_seed_2hz/track_info_tp.json')
+    scene_file = input_file.replace('track_info_tp', 'scene2trackname')
+    map_scene_track = load_json(scene_file)
+    tracks = load_json(input_file)
     padded_tracks = padd_scene_tracks(nusc, map_scene_track, tracks)
-    # save_json(padded_tracks, '/workspace/CenterPoint/work_dirs/immo/cp_5_seed_2hz/track_info_tp_padded_tracks.json')
-    save_json(padded_tracks, '/workspace/CenterPoint/work_dirs/immo/cp_5_seed_2hz/gt_track_info_tp_padded_tracks.json')
+    save_json(padded_tracks, input_file.replace('track_info_tp', 'track_info_tp_padded_tracks'))
 
 if __name__ == "__main__":
     from ipdb import launch_ipdb_on_exception, set_trace

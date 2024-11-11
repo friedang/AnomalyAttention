@@ -35,17 +35,97 @@ from det3d.datasets.registry import DATASETS
 
 import torch
 from torch.utils.data import Dataset, DataLoader
+from typing import Dict, Union, Tuple
+
+
+class FalsePositiveAugmentation(torch.nn.Module):
+    def __init__(
+        self,
+        center_distance_threshold: float = 2.0,
+        size_factor_range: Tuple[float, float] = (0.5, 1.5),
+        fp_probability: float = 0.5
+    ):
+        """
+        Initialize FP augmentation with class-independent center distance threshold.
+        
+        Args:
+            center_distance_threshold: Maximum center distance threshold (meters)
+            size_factor_range: Range for random size scaling
+            fp_probability: Probability of converting a GT to FP
+        """
+        super().__init__()
+        self.center_distance_threshold = center_distance_threshold
+        self.size_factor_range = size_factor_range
+        self.fp_probability = fp_probability
+
+    def generate_translation_noise(self, translation: torch.Tensor, threshold: float) -> torch.Tensor:
+        """Generate noise vector that exceeds the center distance threshold."""
+        # Generate random direction
+        noise = torch.randn_like(translation)
+        noise = noise / torch.norm(noise)
+        
+        # Scale noise to exceed threshold
+        scale = threshold * (1.0 + torch.rand(1) * 0.5)  # 1.0-1.5 times threshold
+        
+        # scale = threshold * (1.0 + torch.rand(1) * 0.5)  # 1.0-1.5 times threshold
+        # noise_dim = torch.randint(0, 2, (1,))
+        # noise[noise_dim] = noise[noise_dim] + scale
+
+        return noise + scale
+
+    def forward(self, bbox: Dict[str, Union[torch.Tensor, list]]) -> Dict[str, torch.Tensor]:
+        """
+        Apply FP augmentation to a single bounding box.
+        
+        Args:
+            bbox: Dictionary containing 'translation', 'size', and 'rotation' keys
+            
+        Returns:
+            Augmented bounding box dictionary
+        """
+        if torch.rand(1) > self.fp_probability:
+            return bbox
+
+        # Convert inputs to tensors if they're lists
+        # bbox = {k: torch.tensor(v) if isinstance(v, list) else v for k, v in bbox.items()}
+        
+        # Augment translation only
+        translation_noise = self.generate_translation_noise(torch.tensor(bbox['translation']), self.center_distance_threshold)
+        augmented_transloation = torch.tensor(bbox['translation']) + translation_noise
+        bbox['translation'] = augmented_transloation.tolist()
+        bbox['TP'] = 0
+        
+        return bbox
+
+    @torch.no_grad()
+    def __call__(self, bbox: Dict[str, Union[torch.Tensor, list]]) -> Dict[str, torch.Tensor]:
+        return self.forward(bbox)
+
 
 class SceneDataset(Dataset):
-    def __init__(self, scenes_info_path=None, track_info=None, gt_scenes_info_path=None, gt_track_info=None, load_chunks_from=None, sample_ratio=None):
+    def __init__(self, scenes_info_path=None, track_info=None, gt_scenes_info_path=None, gt_track_info=None,
+                 load_chunks_from=None, sample_ratio=1, chunk_size=5):
         # scenes is a dict where keys are scene names, and values are lists of tensors
         self.chunks = []
         self.chunk_size = 5
         self.dummy = {'translation': [-500, -500, -500], 'size': [-500, -500, -500], 'rotation': [-500, -500, -500, -500],
-                      'sample_token': 'dummy', 'TP': -500, 'num_lidar_pts': -500, 'tracking_id': 'dummy'}
+                      'sample_token': 'dummy', 'TP': -500, 'num_lidar_pts': -500, 'tracking_id': 'dummy', 'detection_name': 'dummy'}
+        
+        detection_names = ['car','bus','trailer','truck','pedestrian','bicycle',
+                                'motorcycle','construction_vehicle', 'barrier', 'traffic_cone']
+        self.name_dict = {n: i+1 for n, i in zip(detection_names, range(len(detection_names)))}
+
         self.max_track_len = 41
-        max_scene_size = 2350
-        max_gt_scene_size = 205
+        max_scene_size = 2400 # 3690 2350 #
+        max_gt_scene_size = 300
+        sample_ratio = None if sample_ratio == 1 else sample_ratio
+
+        self.fp_aug = FalsePositiveAugmentation(
+            center_distance_threshold=2.0,
+            size_factor_range=(0.5, 1.5),
+            fp_probability=0.7
+        )
+
         if load_chunks_from:
             self.chunks = torch.load(load_chunks_from)
         else:
@@ -53,21 +133,24 @@ class SceneDataset(Dataset):
                 scenes_info = json.load(open(scenes_info_path, 'r'))
                 track_info = json.load(open(track_info, 'r'))
                 self.scene_names = list(scenes_info.keys())
-                self.fill_chunks(track_info, scenes_info, max_scene_size)
+                self.fill_chunks(track_info, scenes_info, max_scene_size, gt=False)
             if gt_scenes_info_path:
                 gt_scenes_info = json.load(open(gt_scenes_info_path, 'r'))
                 gt_track_info = json.load(open(gt_track_info, 'r'))
                 self.scene_names = list(gt_scenes_info.keys())
-                self.fill_chunks(gt_track_info, gt_scenes_info, max_gt_scene_size)
+                # for _ in range(2):
+                # self.fill_chunks(gt_track_info, gt_scenes_info, max_gt_scene_size, gt=True)
+                # for _ in range(5):
+                #     self.fill_chunks(gt_track_info, gt_scenes_info, max_gt_scene_size, gt=True, augment=True)
+
             if sample_ratio:
+                # TODO Move this to the top and sample scene names instead
                 torch.manual_seed(random.randint(0, sys.maxsize))
                 total_indices = torch.randperm(len(self.chunks))
                 split = int(sample_ratio * len(self.chunks))
                 self.chunks = [x for _, x in sorted(zip(total_indices, self.chunks))]
                 train_chunk = self.chunks[:split]
                 val_chunk = self.chunks[split:]
-                # train_chunk = self.replace_tensor_values_in_tuples(train_chunk)
-                # val_chunk = self.replace_tensor_values_in_tuples(val_chunk)
                 torch.save(train_chunk, scenes_info_path.replace('scene2trackname.json', 'train_chunks.pt'))
                 torch.save(val_chunk, scenes_info_path.replace('scene2trackname.json', 'val_chunks.pt'))
 
@@ -76,19 +159,85 @@ class SceneDataset(Dataset):
                 self.chunks = train_chunk
 
         self.chunks = self.chunks
+        if not sample_ratio and not load_chunks_from:
+            torch.save(self.chunks, scenes_info_path.replace('scene2trackname.json', 'inference_chunks.pt'))
+
+    def fill_chunks(self, track_info, scenes_info, max_scene_size, gt=False, augment=False):
+        self.scenes = {k: [] for k in self.scene_names}
+        print(f"Number of non dummy items in track_info is {len([v for values in track_info.values() for v in values if v['TP'] != -500])}")
+
+        for name in self.scene_names:
+            track_names = scenes_info[name]
+            for n in track_names:
+                self.scenes[name].append(track_info[n])
+            
+            if len(self.scenes[name]) < max_scene_size:
+               track_len_diff = max_scene_size - len(self.scenes[name])
+               dummy_track = [self.dummy] * 41
+               for _ in range(track_len_diff):
+                   self.scenes[name].append(dummy_track)
+        
+        print(f"Number of non dummy items in self.scenes is {len([v for values in self.scenes.values() for k in values for v in k if v['TP'] != -500])}")
+        for name in self.scenes.keys():
+            # scene_data = [det for track in self.scenes[name] for det in track]
+            # scene_data = []
+            # for i in range(self.max_track_len):
+            #     for track in self.scenes[name]:
+            #         scene_data.append(track[i])
+
+            scene_data = []
+            for i in range(0, self.max_track_len, self.chunk_size):
+                for track in self.scenes[name]:
+                    if i + self.chunk_size > self.max_track_len:
+                        scene_data.append(track[i])
+                        continue
+                    for j in range(self.chunk_size):
+                        scene_data.append(track[i+j])
+
+            if all(d['TP'] == -500 for d in scene_data):
+                continue
+
+            if gt and augment:
+                # Augment GT detections
+                for i in range(0, len(scene_data), self.chunk_size):
+                    chunk = scene_data[i:i + self.chunk_size]
+                    if all(d['TP'] == -500 for d in chunk):
+                        continue
+                    if all(d['TP'] == 1 for d in chunk):
+                        # Augment the chunk
+                        for j, detection in enumerate(chunk):
+                            if detection['TP'] == 1:
+                                # Augment the detection
+                                aug_bbox = self.fp_aug(detection)
+                                chunk[j].update(aug_bbox)
+                    self.chunks.append(self._collate_scene(chunk, gt=True))
+            else:
+                # Process non-augmented chunks
+                for i in range(0, len(scene_data), self.chunk_size):
+                    # filter dummy-only chunks
+                    if all(d['TP'] == -500 for d in scene_data[i:i + self.chunk_size]):
+                        continue
+                    else:
+                        if len(scene_data[i:i + self.chunk_size]) < self.chunk_size:
+                            len_diff  = self.chunk_size - len(scene_data[i:i + self.chunk_size])
+                            for i in range(len_diff):
+                                scene_data.append(self.dummy)
+                        self.chunks.append(self._collate_scene(scene_data[i:i + self.chunk_size], gt=gt))
+
+        print(f"Number of non dummy items in chunks is {len([v for values in self.chunks for v in values[1][1] if v != 'dummy'])}")
 
     def replace_tensor_values_in_tuples(self, data):
         # Iterate over the list of tuples
         for i, (first_tensor, _, last_tensor) in enumerate(data):
             # Replace -500 with -5 in the first tensor
             data[i] = (torch.where(first_tensor == -500, torch.tensor(-5), first_tensor),
-                    data[i][1],  # Keep the middle element unchanged
-                    torch.where(last_tensor == -500, torch.tensor(-5), last_tensor))
+                       data[i][1],  # Keep the middle element unchanged
+                       torch.where(last_tensor == -500, torch.tensor(-5), last_tensor))
             
         print(f"Number of -5 dummy items in chunks is {len([v for values in data for v in values[0] if v == -5])}")
         return data
 
-    def fill_chunks(self, track_info, scenes_info, max_scene_size):
+    # def fill_chunks(self, track_info, scenes_info, max_scene_size, gt=False):
         self.scenes = {k: [] for k in self.scene_names}
         print(f"Number of non dummy items in track_info is {len([v for values in track_info.values() for v in values if v['TP'] != -500])}")
         for name in self.scene_names:
@@ -106,35 +255,74 @@ class SceneDataset(Dataset):
         # Convert each scene's list of dicts into a tensor
         for name in self.scenes.keys():
             scene_data = [det for track in self.scenes[name] for det in track]
+
+            if all(d['TP'] == -500 for d in scene_data):
+                continue
+            elif self.chunk_size == self.max_track_len:
+                if len(scene_data) <= self.chunk_size:
+                    len_diff  = self.chunk_size - len(scene_data)
+                    for i in range(len_diff):
+                        scene_data.append(self.dummy)
+                self.chunks.append(self._collate_scene(scene_data, gt))
+                continue
+            
             for i in range(0, len(scene_data), self.chunk_size):
                 # filter dummy-only chunks
                 if all(d['TP'] == -500 for d in scene_data[i:i + self.chunk_size]):
                     continue
                 else:
+                    if len(scene_data[i:i + self.chunk_size]) < self.chunk_size:
+                        len_diff  = self.chunk_size - len(scene_data[i:i + self.chunk_size])
+                        for i in range(len_diff):
+                            scene_data.append(self.dummy)
                     self.chunks.append(
-                        self._collate_scene(scene_data[i:i + self.chunk_size]))
-            # self.scenes[name] = self._collate_scene(self.scenes[name])
+                        self._collate_scene(scene_data[i:i + self.chunk_size], gt))
                     
         print(f"Number of non dummy items in chunks is {len([v for values in self.chunks for v in values[1][1] if v != 'dummy'])}")
 
-    def _collate_scene(self, scene_data):
+    def _collate_scene(self, scene_data, gt=False):
         """
         Converts a list of dicts for one scene into a single tensor by extracting values from each field.
         Returns a tensor where the first dimension is the number of tracks (max_scene_size), 
         and subsequent dimensions depend on the field sizes.
         """
+        # set_trace()
         translations = torch.tensor([d['translation'] for d in scene_data], dtype=torch.float32)
         sizes = torch.tensor([d['size'] for d in scene_data], dtype=torch.float32)
         rotations = torch.tensor([d['rotation'] for d in scene_data], dtype=torch.float32)
         tp = torch.tensor([d['TP'] for d in scene_data], dtype=torch.float32)
         num_lidar_pts = torch.tensor([d['num_lidar_pts'] for d in scene_data], dtype=torch.float32)
         tokens = [d['sample_token'] for d in scene_data]
-        ids = [(d['sample_token'] + '_' + d['tracking_id']) if 'tracking_id' in d.keys() else 'dummy' for d in scene_data]
+        if gt:
+            ids = [(d['sample_token'] + '_gt') if d['TP']!=-500 else 'dummy' for d in scene_data]
+        else:
+            ids = [(d['sample_token'] + '_' + d['tracking_id']) if ('tracking_id' in d.keys() and d['TP']!=-500) else 'dummy' for d in scene_data]
 
+        # set_trace()
+        output_keys = ['translation', 'size', 'velocity', 'rotation', 'tracking_score', 'sample_token',
+                       'tracking_id', 'tracking_name', 'detection_name', 'detection_score', 'attribute_name']
+        
+        # TODO repalce all of this with json Encoder for tensors in test_ad
+        for d in scene_data:
+            for k in output_keys:
+                if k not in d.keys():
+                    d[k] = 'dummy'
+                elif isinstance(d[k], list):
+                    for i in range(len(d[k])):
+                        if isinstance(d[k][i], torch.Tensor):
+                            d[k][i] = float(d[k][i])
+                elif isinstance(d[k], torch.Tensor):
+                    d[k] = float(d[k])
+                
+        # dict_keys(['translation', 'size', 'velocity', 'rotation', 'tracking_score', 'sample_token', 'tracking_id', 'tracking_name', 'detection_name', 'detection_score', 'attribute_name', 'TP', 'num_lidar_pts'])
+        det_names = [dic['detection_name'] if dic['detection_name']!=-500 else 'dummy' for dic in scene_data]
+        # TODO bring back class number as feature
+        name_number = torch.tensor([self.name_dict[d] if (isinstance(d, str) and d!='dummy') else -500 for d in det_names], dtype=torch.float32)
+        # set_trace()
         # Stack all tensors together into one large tensor for the scene
         return (tp.unsqueeze(-1),
-                (tokens, ids),
-                torch.cat([translations, sizes, rotations, num_lidar_pts.unsqueeze(-1)], dim=-1))
+                (tokens, ids, scene_data),
+                torch.cat([translations, sizes, rotations, num_lidar_pts.unsqueeze(-1)], dim=-1)) # , name_number.unsqueeze(-1)], dim=-1))
 
     def __len__(self):
         # return len(self.scene_names)
@@ -147,7 +335,7 @@ class SceneDataset(Dataset):
 
 # scenes_info = json.load(open('/workspace/CenterPoint/work_dirs/immo/cp_5_seed_2hz/scene2trackname.json', "r"))
 # track_info = json.load(open('/workspace/CenterPoint/work_dirs/immo/cp_5_seed_2hz/track_info_tp_padded_tracks.json', "r"))
-# gt_scenes_info = json.load(open('/workspace/CenterPoint/work_dirs/immo/cp_5_seed_2hz/gt_scene2trackname_tp.json', "r"))
+# gt_scenes_info = json.load(open('/workspace/CenterPoint/work_dirs/immo/cp_5_seed_2hz/gt_scene2trackname.json', "r"))
 # gt_track_info = json.load(open('/workspace/CenterPoint/work_dirs/immo/cp_5_seed_2hz/gt_track_info_tp_padded_tracks.json', "r"))
 
 # chunks = torch.load('/workspace/CenterPoint/work_dirs/immo/cp_5_seed_2hz/chunks.pt')
@@ -156,279 +344,3 @@ class SceneDataset(Dataset):
 #     test = SceneDataset(scenes_info, track_info, gt_scenes_info, gt_track_info)
 #     set_trace()
 #     print(1)
-
-
-# @DATASETS.register_module
-class NuScenesTrackDataset(PointCloudDataset):
-    NumPointFeatures = 5  # x, y, z, intensity, ring_index
-
-    def __init__(
-        self,
-        info_path,
-        root_path,
-        nsweeps=0, # here set to zero to catch unset nsweep
-        cfg=None,
-        pipeline=None,
-        class_names=None,
-        test_mode=False,
-        version="v1.0-trainval",
-        load_interval=1,
-        sample_ratio=1,
-        load_indices=None,
-        **kwargs,
-    ):
-        self.load_interval = load_interval 
-        super(NuScenesTrackDataset, self).__init__(
-            root_path, info_path, pipeline, test_mode=test_mode, class_names=class_names, sample_ratio=sample_ratio,
-        )
-
-        self.nsweeps = nsweeps
-        assert self.nsweeps > 0, "At least input one sweep please!"
-        print(self.nsweeps)
-
-        self._info_path = info_path
-        self._class_names = class_names
-
-        self.load_infos(self._info_path, sample_ratio, load_indices)
-        self.flag = np.ones(len(self), dtype=np.uint8)
-
-        self._num_point_features = NuScenesTrackDataset.NumPointFeatures
-        self._name_mapping = general_to_detection
-
-        self.virtual = kwargs.get('virtual', False)
-        if self.virtual:
-            self._num_point_features = 16 
-
-        self.version = version
-        self.eval_version = "detection_cvpr_2019"
-
-    def reset(self):
-        self.logger.info(f"re-sample {self.frac} frames from full set")
-        random.shuffle(self._nusc_infos_all)
-        self._nusc_infos = self._nusc_infos_all[: self.frac]
-
-    def load_infos(self, info_path, sample_ratio=1, load_indices=None):
-        with open(self._info_path, "rb") as f:
-            _nusc_infos_all = load_json(f)
-
-        _nusc_infos_all = _nusc_infos_all[::self.load_interval]
-
-        self._nusc_infos = list(_nusc_infos_all.keys())
-
-    def __len__(self):
-
-        if not hasattr(self, "_nusc_infos"):
-            self.load_infos(self._info_path)
-
-        return len(self._nusc_infos)
-
-    @property
-    def ground_truth_annotations(self):
-        if "gt_boxes" not in self._nusc_infos[0]:
-            return None
-        cls_range_map = config_factory(self.eval_version).serialize()['class_range']
-        gt_annos = []
-        for info in self._nusc_infos:
-            gt_names = np.array(info["gt_names"])
-            gt_boxes = info["gt_boxes"]
-            mask = np.array([n != "ignore" for n in gt_names], dtype=np.bool_)
-            gt_names = gt_names[mask]
-            gt_boxes = gt_boxes[mask]
-            # det_range = np.array([cls_range_map[n] for n in gt_names_mapped])
-            det_range = np.array([cls_range_map[n] for n in gt_names])
-            det_range = det_range[..., np.newaxis] @ np.array([[-1, -1, 1, 1]])
-            mask = (gt_boxes[:, :2] >= det_range[:, :2]).all(1)
-            mask &= (gt_boxes[:, :2] <= det_range[:, 2:]).all(1)
-            N = int(np.sum(mask))
-            gt_annos.append(
-                {
-                    "bbox": np.tile(np.array([[0, 0, 50, 50]]), [N, 1]),
-                    "alpha": np.full(N, -10),
-                    "occluded": np.zeros(N),
-                    "truncated": np.zeros(N),
-                    "name": gt_names[mask],
-                    "location": gt_boxes[mask][:, :3],
-                    "dimensions": gt_boxes[mask][:, 3:6],
-                    "rotation_y": gt_boxes[mask][:, 6],
-                    "token": info["token"],
-                }
-            )
-        return gt_annos
-
-    def get_sensor_data(self, idx):
-
-        info = self._nusc_infos[idx]
-
-        res = {
-            "lidar": {
-                "type": "lidar",
-                "points": None,
-                "nsweeps": self.nsweeps,
-                # "ground_plane": -gp[-1] if with_gp else None,
-                "annotations": None,
-            },
-            "metadata": {
-                "image_prefix": self._root_path,
-                "num_point_features": self._num_point_features,
-                "token": info["token"],
-            },
-            "calib": None,
-            "cam": {},
-            "mode": "val" if self.test_mode else "train",
-            "virtual": self.virtual 
-        }
-
-        data, _ = self.pipeline(res, info)
-
-        return data
-
-    def __getitem__(self, idx):
-        return self.get_sensor_data(idx)
-
-    def evaluation(self, detections, output_dir=None, testset=False, train=False):
-        eval_set_map = {
-            "v1.0-mini": "mini_val",
-            "v1.0-trainval": "train" if train else "val",
-            "v1.0-test": "test",
-        }
-
-        # if not testset:
-        #     dets = []
-        #     gt_annos = self.ground_truth_annotations
-        #     assert gt_annos is not None
-
-        #     miss = 0
-        #     for gt in gt_annos:
-        #         try:
-        #             dets.append(detections[gt["token"]])
-        #         except Exception:
-        #             miss += 1
-
-        #     assert miss == 0
-        # else:
-        #     dets = [v for _, v in detections.items()]
-        #     assert len(detections) == 6008
-
-        # nusc_annos = {
-        #     "results": {},
-        #     "meta": None,
-        # }
-
-        nusc = NuScenes(version=self.version, dataroot=str(self._root_path), verbose=True)
-
-        mapped_class_names = []
-        for n in self._class_names:
-            if n in self._name_mapping:
-                mapped_class_names.append(self._name_mapping[n])
-            else:
-                mapped_class_names.append(n)
-
-        # for det in dets:
-        #     annos = []
-        #     boxes = _second_det_to_nusc_box(det)
-        #     boxes = _lidar_nusc_box_to_global(nusc, boxes, det["metadata"]["token"])
-        #     for i, box in enumerate(boxes):
-        #         name = mapped_class_names[box.label]
-        #         if np.sqrt(box.velocity[0] ** 2 + box.velocity[1] ** 2) > 0.2:
-        #             if name in [
-        #                 "car",
-        #                 "construction_vehicle",
-        #                 "bus",
-        #                 "truck",
-        #                 "trailer",
-        #             ]:
-        #                 attr = "vehicle.moving"
-        #             elif name in ["bicycle", "motorcycle"]:
-        #                 attr = "cycle.with_rider"
-        #             else:
-        #                 attr = None
-        #         else:
-        #             if name in ["pedestrian"]:
-        #                 attr = "pedestrian.standing"
-        #             elif name in ["bus"]:
-        #                 attr = "vehicle.stopped"
-        #             else:
-        #                 attr = None
-
-        #         nusc_anno = {
-        #             "sample_token": det["metadata"]["token"],
-        #             "translation": box.center.tolist(),
-        #             "size": box.wlh.tolist(),
-        #             "rotation": box.orientation.elements.tolist(),
-        #             "velocity": box.velocity[:2].tolist(),
-        #             "detection_name": name,
-        #             "detection_score": box.score,
-        #             "attribute_name": attr
-        #             if attr is not None
-        #             else max(cls_attr_dist[name].items(), key=operator.itemgetter(1))[
-        #                 0
-        #             ],
-        #         }
-        #         annos.append(nusc_anno)
-        #     nusc_annos["results"].update({det["metadata"]["token"]: annos})
-
-        # nusc_annos["meta"] = {
-        #     "use_camera": False,
-        #     "use_lidar": True,
-        #     "use_radar": False,
-        #     "use_map": False,
-        #     "use_external": False,
-        # }
-
-        # name = self._info_path.split("/")[-1].split(".")[0]
-        # res_path = str(Path(output_dir) / Path(name + ".json"))
-        # with open(res_path, "w") as f:
-        #     json.dump(nusc_annos, f)
-
-        # print(f"Finish generate predictions for testset, save to {res_path}")
-
-        output_dir = "/workspace/CenterPoint/work_dirs/immo/results_custom_pass/"
-        res_path = Path("/workspace/CenterPoint/work_dirs/immo/results_custom_pass/results.json") # TODO add json result pathing option
-        
-        if not testset:
-            eval_main(
-                nusc,
-                self.eval_version,
-                res_path,
-                eval_set_map[self.version],
-                output_dir,
-            )
-
-            with open(Path(output_dir) / "metrics_summary.json", "r") as f:
-                metrics = json.load(f)
-
-            detail = {}
-            result = f"Nusc {self.version} Evaluation\n"
-            for name in mapped_class_names:
-                detail[name] = {}
-                for k, v in metrics["label_aps"][name].items():
-                    detail[name][f"dist@{k}"] = v
-                threshs = ", ".join(list(metrics["label_aps"][name].keys()))
-                scores = list(metrics["label_aps"][name].values())
-                mean = sum(scores) / len(scores)
-                scores = ", ".join([f"{s * 100:.2f}" for s in scores])
-                result += f"{name} Nusc dist AP@{threshs}\n"
-                result += scores
-                result += f" mean AP: {mean}"
-                result += "\n"
-            res_nusc = {
-                "results": {"nusc": result},
-                "detail": {"nusc": detail},
-            }
-        else:
-            res_nusc = None
-
-        if res_nusc is not None:
-            res = {
-                "results": {"nusc": res_nusc["results"]["nusc"],},
-                "detail": {"eval.nusc": res_nusc["detail"]["nusc"],},
-            }
-        else:
-            res = None
-
-        log_out = {k: np.mean(list(v.values()))
-            for k,v in res['detail']['eval.nusc'].items()
-        }
-        wandb.log(log_out)
-
-        return res, None

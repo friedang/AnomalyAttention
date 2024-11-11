@@ -43,7 +43,7 @@ class TrackingEval:
                  output_dir: str,
                  nusc_version: str,
                  nusc_dataroot: str,
-                 verbose: bool = True,
+                 verbose: bool = False,
                  render_classes: List[str] = None):
         """
         Initialize a TrackingEval object.

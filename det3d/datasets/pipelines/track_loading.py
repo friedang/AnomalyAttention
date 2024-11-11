@@ -2,17 +2,6 @@ import numpy as np
 from ..registry import PIPELINES
 
 @PIPELINES.register_module
-class LoadTrackFromFile(object):
-    def __init__(self, dataset="NuScenesTrackDataset", **kwargs):
-        self.type = dataset
-
-    def __call__(self, res, info):
-        # Assuming `res` contains the raw track data
-        track_data = info['track_data']  # Replace this with the actual track loading logic
-        res['track'] = track_data
-        return res, info
-
-@PIPELINES.register_module
 class TrackPadding(object):
     def __init__(self, max_length=5):
         self.max_length = max_length

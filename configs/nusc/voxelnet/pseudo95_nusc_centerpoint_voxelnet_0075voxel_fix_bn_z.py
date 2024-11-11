@@ -214,7 +214,7 @@ lr_config = dict(
     type="one_cycle", lr_max=0.001, moms=[0.95, 0.85], div_factor=10.0, pct_start=0.4,
 )
 
-checkpoint_config = dict(interval=1)
+checkpoint_config = dict(interval=1)    
 # yapf:disable
 log_config = dict(
     interval=5,

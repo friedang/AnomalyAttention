@@ -171,7 +171,7 @@ test_anno = None
 sample_ratio=1
 load_indices= None # '/workspace/CenterPoint/work_dirs/5_nusc_centerpoint_voxelnet_0075voxel_fix_bn_z/train_indices.pth'
 pseudo_indices='/workspace/CenterPoint/work_dirs/5_nusc_centerpoint_voxelnet_0075voxel_fix_bn_z/pseudo_indices.pth'
-work_dir ='./work_dirs/5_{}/'.format(__file__[__file__.rfind('/') + 1:-3])
+# work_dir ='./work_dirs/5_{}/'.format(__file__[__file__.rfind('/') + 1:-3])
 
 data = dict(
     samples_per_gpu=14,
@@ -263,6 +263,6 @@ import os
 import shutil
 
 config_file = __file__
-destination_file = os.path.join(work_dir, os.path.basename(config_file))
-if not os.path.exists(destination_file):
-    shutil.copy(config_file, destination_file)
+# destination_file = os.path.join(work_dir, os.path.basename(config_file))
+# if not os.path.exists(destination_file):
+#     shutil.copy(config_file, destination_file)

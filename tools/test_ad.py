@@ -1,3 +1,4 @@
+from pathlib import Path
 import torch
 import torch.nn as nn
 import argparse
@@ -8,19 +9,16 @@ import numpy as np
 import matplotlib.pyplot as plt
 from sklearn.metrics import precision_recall_curve, confusion_matrix, PrecisionRecallDisplay
 import logging
+import wandb
 
 from det3d.datasets.nuscenes.nuscenes_track_dataset import SceneDataset
+from det3d.datasets.nuscenes.utils import NpEncoder, save_json
 from det3d.models.classifier.mlp import TrackMLPClassifier
+from det3d.models.classifier.pc_mlp import PCTrackMLPClassifier
+from det3d.models.classifier.track2pc_mlp import Track2PCTrackMLPClassifier
 
 # Define sigmoid function for converting logits to probabilities
 sigmoid = nn.Sigmoid()
-
-# Set up logging
-logging.basicConfig(filename='inference.log', level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
-
-def save_json(output_dict, filename):
-    with open(filename, 'w') as f:
-        json.dump(output_dict, f, indent=4)
 
 # Function to plot precision-recall curve and confidence plots
 def plot_pr_confidence(precision, recall, thresholds, workdir):
@@ -48,20 +46,37 @@ def plot_pr_confidence(precision, recall, thresholds, workdir):
 
 # Function to plot confusion matrix
 def plot_confusion_matrix(y_true, y_pred, workdir):
+    # Compute confusion matrix
     cm = confusion_matrix(y_true, y_pred)
+
+    # Create the plot
     plt.figure()
     plt.imshow(cm, interpolation='nearest', cmap=plt.cm.Blues)
     plt.title('Confusion Matrix')
     plt.colorbar()
+
+    # Add labels for the axes
     tick_marks = np.arange(2)
     plt.xticks(tick_marks, ['0', '1'])
     plt.yticks(tick_marks, ['0', '1'])
     plt.xlabel('Predicted label')
     plt.ylabel('True label')
+
+    # Add the counts in the matrix cells
+    thresh = cm.max() / 2.  # Define a threshold for text color contrast
+    for i in range(cm.shape[0]):
+        for j in range(cm.shape[1]):
+            plt.text(j, i, format(cm[i, j], 'd'),
+                     ha="center", va="center",
+                     color="white" if cm[i, j] > thresh else "black")
+
+    # Save the confusion matrix plot
     plt.savefig(os.path.join(workdir, 'confusion_matrix.png'))
+    plt.close()  # Close the figure after saving to avoid display in notebooks
 
 # Inference function
 def inference(model, dataloader, device, threshold, workdir, validate=False):
+    model.to(device)
     model.eval()
     output_dict = {}
     all_labels = []
@@ -72,10 +87,26 @@ def inference(model, dataloader, device, threshold, workdir, validate=False):
     with torch.no_grad():
         for batch in tqdm(dataloader, desc="Inference"):
             tp, meta, inputs = batch
-            tokens, detection_ids = meta
+            if len(meta)>2:
+                tokens, detection_ids, scene_data = meta
+            else:
+                tokens, detection_ids = meta
+                scene_data = [{}] * len(tokens)
             tokens = [t[0] for t in tokens]
             detection_ids = [t[0] for t in detection_ids]
             inputs = inputs.to(device)
+
+            if args.pc or args.track_pc:
+                pc_data = []
+                for t in tokens:
+                    if t == "dummy":
+                        pc_data.append(np.zeros((4, 5000)))
+                    else:
+                        pointcloud_path = Path('/workspace/CenterPoint/work_dirs/PCs_npy/train') / f"{t}.npy"
+                        pc_data.append(np.load(str(pointcloud_path)).reshape(4, 5000))
+                
+                pc_data = torch.tensor(np.stack(pc_data, axis=0)).float().to(device)
+                inputs = (inputs, pc_data)
 
             # Forward pass
             outputs = model(inputs)
@@ -84,30 +115,36 @@ def inference(model, dataloader, device, threshold, workdir, validate=False):
             # Apply threshold to get TP labels (0 or 1)
             predicted_labels = (confidences >= threshold).astype(int)
 
+            valid_idx = torch.zeros(tp.shape)
             # Filter out 'dummy' tokens or 'dummy' ids
-            for _, (t, det_id, conf, pred) in enumerate(zip(tokens, detection_ids, confidences, predicted_labels)):
-                if 'dummy' not in det_id:  # Filter based on TP and id
+            for i, (t, det_id, conf, pred, meta_data) in enumerate(zip(tokens, detection_ids, confidences, predicted_labels, scene_data)):
+                if 'dummy' not in det_id and not 'gt' in det_id:  # Filter based on TP and id
                     # Convert token and detection_id to string for JSON compatibility
                     key = str(t)
                     if key not in output_dict.keys():
-                        output_dict[key] = []    
-                    
-                    output_dict[key].append(
-                        {"confidence": float(conf), "TP": int(pred), 
-                            "id": det_id, "tracking_id": det_id.replace(t, '').replace('_', '')})
-                    all_confidences.append(conf)
-                    all_predictions.append(pred)
+                        output_dict[key] = []
+
+                    output = {"confidence": float(conf), "TP": int(pred),
+                                "id": det_id, "tracking_id": det_id.replace(t, '').replace('_', ''),
+                                "sample_token": key,}
+                    if meta_data:
+                        output.update({k: v for k, v in meta_data.items() if k not in output.keys()})
+
+                    output_dict[key].append(output)
+                    all_confidences.extend(conf)    # python3 ./tools/merge_seed_pseudo_gt.py
+                    all_predictions.extend(pred)
+                    valid_idx[0, i, 0] = 1
 
             # Collect true labels if in validation mode
             if validate:
                 # Filter out -500 (padding) labels
-                valid_tp = tp[tp != -500].cpu().numpy()
+                valid_tp = tp[valid_idx == 1].cpu().numpy()
                 all_labels.extend(valid_tp)
 
     # Save the results to a json file
     logging.info(f"Number of TP is {len([v for values in output_dict.values() for v in values if v['TP'] == 1])}")
-    logging.info(f"Number of FP is {len([v for values in output_dict.values() for v in values if v['TP'] != 1])}")
-    save_json(output_dict, os.path.join(workdir, 'inference_results.json'))
+    logging.info(f"Number of FP is {len([v for values in output_dict.values() for v in values if v['TP'] == 0])}")
+    save_json(output_dict, os.path.join(workdir, 'inference_results.json'), cls=NpEncoder)
 
     if validate:
         # Precision-Recall curve
@@ -120,17 +157,39 @@ def inference(model, dataloader, device, threshold, workdir, validate=False):
         plot_confusion_matrix(all_labels, all_predictions, workdir)
 
         # Final TP/FP evaluation
-        set_trace()
         all_labels = np.array(all_labels)
-        # all_predictions = np.array(all_predictions)
-        # matches = np.sum(all_labels == all_predictions)
-        # mismatches = np.sum(all_labels != all_predictions)
+        all_predictions = np.array(all_predictions)
+        matches = np.sum(all_labels == all_predictions)
+        mismatches = np.sum(all_labels != all_predictions)
 
-        # logging.info(f"Total matches (correct predictions): {matches}")
-        # logging.info(f"Total mismatches (incorrect predictions): {mismatches}")
+        # Calculate percentages
+        total_predictions = len(all_predictions)
+        correct_preds_percentage = (matches / total_predictions) * 100
+        correct_tp_percentage = (np.sum((all_labels == 1) & (all_predictions == 1)) / np.sum(all_labels == 1)) * 100
+        correct_tn_percentage = (np.sum((all_labels == 0) & (all_predictions == 0)) / np.sum(all_labels == 0)) * 100
 
-        # print(f"Total matches (correct predictions): {matches}")
-        # print(f"Total mismatches (incorrect predictions): {mismatches}")
+        # Log the values
+        wandb.log({
+            "Correct preds": matches,
+            "Wrong preds": mismatches,
+            "Correct preds %": correct_preds_percentage,
+            "Correct TP % (label 1)": correct_tp_percentage,
+            "Correct TN % (label 0)": correct_tn_percentage
+        })
+
+        # Print and log information
+        logging.info(f"Total matches (correct predictions): {matches}")
+        logging.info(f"Total mismatches (incorrect predictions): {mismatches}")
+        logging.info(f"Correct predictions percentage: {correct_preds_percentage:.2f}%")
+        logging.info(f"Correct TP (label 1) percentage: {correct_tp_percentage:.2f}%")
+        logging.info(f"Correct TN (label 0) percentage: {correct_tn_percentage:.2f}%")
+
+        print(f"Total number of predictions: {total_predictions}")
+        print(f"Total matches (correct predictions): {matches}")
+        print(f"Total mismatches (incorrect predictions): {mismatches}")
+        print(f"Correct predictions percentage: {correct_preds_percentage:.2f}%")
+        print(f"Correct TP (label 1) percentage: {correct_tp_percentage:.2f}%")
+        print(f"Correct TN (label 0) percentage: {correct_tn_percentage:.2f}%")
 
 def test(rank, world_size, args):
     # Initialize distributed processing group for multi-GPU inference
@@ -138,13 +197,32 @@ def test(rank, world_size, args):
         torch.distributed.init_process_group(backend="nccl", rank=rank, world_size=world_size)
 
     # Load dataset
-    dataset = SceneDataset(load_chunks_from=args.load_chunks_from)
+    if args.load_chunks_from:
+        dataset = SceneDataset(load_chunks_from=args.load_chunks_from)
+    else:
+        dataset = SceneDataset(scenes_info_path=args.scenes_info, track_info=args.track_info)
     dataloader = torch.utils.data.DataLoader(dataset, batch_size=args.batch_size, shuffle=False)
 
     # Load model
     device = torch.device(f"cuda:{rank}" if (not args.cpu) and torch.cuda.is_available() else 'cpu')
-    model = TrackMLPClassifier(input_size=11, hidden_size=128, num_layers=3).to(device)
+    if args.track_pc:
+        model = Track2PCTrackMLPClassifier(input_size=11, hidden_size=128, num_layers=3)
+    elif args.pc:
+        model = PCTrackMLPClassifier(input_size=11, hidden_size=128, num_layers=3)
+    else:
+        model = TrackMLPClassifier(input_size=11, hidden_size=128, num_layers=3)
+
     model.load_state_dict(torch.load(args.model_checkpoint, map_location=device)['model_state_dict'], strict=False)
+
+    # Logging setup
+    if rank == 0:
+        if args.run_name:
+            wandb.init(project="EvalTrackMLPClassifier", name=args.run_name)
+        else:
+            wandb.init(project="EvalTrackMLPClassifier")
+        # wandb.config.update(args)
+        wandb.watch(model)
+        logging.basicConfig(filename=os.path.join(args.workdir, 'testing.log'), level=logging.INFO)
 
     # Output directory
     if not os.path.exists(args.workdir):
@@ -165,14 +243,19 @@ def test(rank, world_size, args):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
+    parser.add_argument('--scenes_info', type=str, help="Path to scenes info")
+    parser.add_argument('--track_info', type=str, help="Path to track info")
     parser.add_argument('--batch_size', type=int, default=1, help="Batch size for inference")
     parser.add_argument('--confidence_threshold', type=float, default=0.5, help="Threshold for TP (default: 0.5)")
     parser.add_argument('--model_checkpoint', type=str, required=True, help="Path to the trained model checkpoint")
-    parser.add_argument('--load_chunks_from', type=str, required=True, help="Path to the chunk data")
+    parser.add_argument('--load_chunks_from', type=str, help="Path to the chunk data")
     parser.add_argument('--workdir', type=str, required=True, help="Directory to save output json and plots")
     parser.add_argument('--eval', action="store_true", help="Run evaluation with validation labels")
     parser.add_argument('--cpu', action="store_true", help="Use CPU for inference")
     parser.add_argument('--world_size', type=int, default=1, help="Number of GPUs for distributed inference")
+    parser.add_argument('--pc', action="store_true", help="Use point clouds")
+    parser.add_argument('--track_pc', action="store_true", help="Use point clouds")
+    parser.add_argument('--run_name', type=str, default='', help="wandb run name")
 
     args = parser.parse_args()
 
