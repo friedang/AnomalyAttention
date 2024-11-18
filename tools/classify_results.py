@@ -9,14 +9,13 @@ from nuscenes.eval.detection.data_classes import DetectionBox
 from nuscenes.eval.common.data_classes import EvalBoxes
 from nuscenes.eval.common.utils import center_distance, scale_iou, yaw_diff, velocity_l2, attr_acc, cummean
 from nuscenes.eval.detection.data_classes import DetectionMetricData
-# from nuscenes.eval.detection.algo import accumulate
 
 
 def accumulate(gt_boxes: EvalBoxes,
                pred_boxes: EvalBoxes,
                class_name: str,
                dist_fcn: Callable,
-               dist_th: float = 2.0, # TODO [0.5, 1.0, 2.0, 4.0]
+               dist_th: float = 4.0, # TODO [0.5, 1.0, 2.0, 4.0]
                verbose: bool = False) -> DetectionMetricData:
     """
     Average Precision over predefined different recall thresholds for a single distance threshold.
@@ -250,7 +249,7 @@ def classify_detections(detection_results, nusc, eval_split, result_path, output
 def main():
     # Load the JSON file
     # input_file = '/workspace/CenterPoint/work_dirs/ad_mlp_05/Resnet_baseline_with_Focal_gt/nusc_validation/immo_results.json'
-    input_file = "/workspace/CenterPoint/work_dirs/immo/cp_valset/results.json"
+    input_file = "/workspace/CenterPoint/work_dirs/immo/cp_5_seed_2hz_balanced/results.json"
     output_file = input_file.replace('.json', '_tp.json')
     output_dir = input_file.replace('results.json', '')
     detection_results = load_json(input_file)
@@ -294,10 +293,9 @@ def main():
     
     # Classify detections
     updated_results = classify_detections(detection_results, nusc, 'train', input_file, output_dir)
-    print(f"Number of non dummy items in dets is {len([v for values in detection_results['results'].values() for v in values if v['TP'] != -500])}")
-    print(f"Number of TP in dets is {len([v for values in detection_results['results'].values() for v in values if v['TP'] == 1])}")
-    print(f"Number of FP in dets is {len([v for values in detection_results['results'].values() for v in values if v['TP'] == 0])}")
-    updated_results = detection_results
+    print(f"Number of non dummy items in dets is {len([v for values in updated_results['results'].values() for v in values if v['TP'] != -500])}")
+    print(f"Number of TP in dets is {len([v for values in updated_results['results'].values() for v in values if v['TP'] == 1])}")
+    print(f"Number of FP in dets is {len([v for values in updated_results['results'].values() for v in values if v['TP'] == 0])}")
 
     # Save the updated JSON file
     save_json(updated_results, output_file)

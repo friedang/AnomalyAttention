@@ -1,6 +1,8 @@
 from pathlib import Path
 import torch
 import torch.nn as nn
+import torch.distributed as dist
+from torch.nn.parallel import DistributedDataParallel as DDP
 import argparse
 from tqdm import tqdm
 import os
@@ -11,14 +13,31 @@ from sklearn.metrics import precision_recall_curve, confusion_matrix, PrecisionR
 import logging
 import wandb
 
+from tools.train_ad import setup_logging
+
 from det3d.datasets.nuscenes.nuscenes_track_dataset import SceneDataset
 from det3d.datasets.nuscenes.utils import NpEncoder, save_json
 from det3d.models.classifier.mlp import TrackMLPClassifier
 from det3d.models.classifier.pc_mlp import PCTrackMLPClassifier
 from det3d.models.classifier.track2pc_mlp import Track2PCTrackMLPClassifier
+from det3d.models.classifier.voxel_mlp import VoxelTrackMLPClassifier
+
 
 # Define sigmoid function for converting logits to probabilities
 sigmoid = nn.Sigmoid()
+
+
+def log_model_info(model):
+    # Log the model architecture
+    logging.info("Model Architecture:\n%s", model)
+    
+    # Calculate the number of parameters
+    num_params = sum(p.numel() for p in model.parameters())
+    logging.info("Number of parameters: %d", num_params)
+    
+    # Calculate the model size in MB
+    model_size_mb = sum(p.element_size() * p.numel() for p in model.parameters()) / (1024 ** 2)
+    logging.info("Model size: %.2f MB", model_size_mb)
 
 # Function to plot precision-recall curve and confidence plots
 def plot_pr_confidence(precision, recall, thresholds, workdir):
@@ -82,12 +101,13 @@ def inference(model, dataloader, device, threshold, workdir, validate=False):
     all_labels = []
     all_predictions = []
     all_confidences = []
+    inf = True if not validate else False
 
     # Iterate over batches
     with torch.no_grad():
         for batch in tqdm(dataloader, desc="Inference"):
             tp, meta, inputs = batch
-            if len(meta)>2:
+            if inf:
                 tokens, detection_ids, scene_data = meta
             else:
                 tokens, detection_ids = meta
@@ -96,19 +116,29 @@ def inference(model, dataloader, device, threshold, workdir, validate=False):
             detection_ids = [t[0] for t in detection_ids]
             inputs = inputs.to(device)
 
-            if args.pc or args.track_pc:
-                pc_data = []
-                for t in tokens:
-                    if t == "dummy":
-                        pc_data.append(np.zeros((4, 5000)))
-                    else:
-                        pointcloud_path = Path('/workspace/CenterPoint/work_dirs/PCs_npy/train') / f"{t}.npy"
-                        pc_data.append(np.load(str(pointcloud_path)).reshape(4, 5000))
-                
-                pc_data = torch.tensor(np.stack(pc_data, axis=0)).float().to(device)
-                inputs = (inputs, pc_data)
+            if args.pc or args.track_pc or args.voxel:
+                if inf:
+                    tokens, _, _ = meta
+                else:
+                    tokens, _ = meta
+                token_len = len(tokens[0])
+                pc_batch = []
 
-            # Forward pass
+                for i in range(token_len):
+                    dummy_status = True
+                    for t in tokens:
+                        if t[i] != "dummy":
+                            pointcloud_path = Path('/workspace/CenterPoint/work_dirs/PCs_npy/train') / f"{t[i]}.npy" if not inf else Path('/workspace/CenterPoint/work_dirs/PCs_npy/val') / f"{t[i]}.npy"
+                            pc_batch.append(np.load(str(pointcloud_path)).T)
+                            dummy_status = False
+                            break
+                    if dummy_status:
+                        pc_batch.append(np.zeros((5, 15000))) # TODO maybe change this hardcoded number; load pc and set shape
+                    
+                pc_batch = torch.tensor(np.stack(pc_batch, axis=0)).float().to(device)
+                
+                inputs = (inputs, pc_batch)
+
             outputs = model(inputs)
             confidences = sigmoid(outputs).squeeze(2).permute(1, 0).cpu().numpy()
 
@@ -120,14 +150,14 @@ def inference(model, dataloader, device, threshold, workdir, validate=False):
             for i, (t, det_id, conf, pred, meta_data) in enumerate(zip(tokens, detection_ids, confidences, predicted_labels, scene_data)):
                 if 'dummy' not in det_id and not 'gt' in det_id:  # Filter based on TP and id
                     # Convert token and detection_id to string for JSON compatibility
-                    key = str(t)
+                    key = t if isinstance(t, str) else t[0]
                     if key not in output_dict.keys():
                         output_dict[key] = []
 
                     output = {"confidence": float(conf), "TP": int(pred),
-                                "id": det_id, "tracking_id": det_id.replace(t, '').replace('_', ''),
+                                "id": det_id, "tracking_id": det_id.replace(key, '').replace('_', ''),
                                 "sample_token": key,}
-                    if meta_data:
+                    if isinstance(meta_data, dict):
                         output.update({k: v for k, v in meta_data.items() if k not in output.keys()})
 
                     output_dict[key].append(output)
@@ -197,32 +227,35 @@ def test(rank, world_size, args):
         torch.distributed.init_process_group(backend="nccl", rank=rank, world_size=world_size)
 
     # Load dataset
+    inf = True if not args.eval else False
     if args.load_chunks_from:
-        dataset = SceneDataset(load_chunks_from=args.load_chunks_from)
+        dataset = SceneDataset(load_chunks_from=args.load_chunks_from, inference=inf)
     else:
-        dataset = SceneDataset(scenes_info_path=args.scenes_info, track_info=args.track_info)
+        dataset = SceneDataset(scenes_info_path=args.scenes_info, track_info=args.track_info, inference=inf)
     dataloader = torch.utils.data.DataLoader(dataset, batch_size=args.batch_size, shuffle=False)
 
     # Load model
     device = torch.device(f"cuda:{rank}" if (not args.cpu) and torch.cuda.is_available() else 'cpu')
     if args.track_pc:
-        model = Track2PCTrackMLPClassifier(input_size=11, hidden_size=128, num_layers=3)
+        model = Track2PCTrackMLPClassifier(input_size=12, hidden_size=128, num_layers=3)
     elif args.pc:
-        model = PCTrackMLPClassifier(input_size=11, hidden_size=128, num_layers=3)
+        model = PCTrackMLPClassifier(input_size=12, hidden_size=128, num_layers=3)
+    elif args.voxel:
+            model = VoxelTrackMLPClassifier(input_size=12, hidden_size=128, num_layers=3)
     else:
-        model = TrackMLPClassifier(input_size=11, hidden_size=128, num_layers=3)
+        model = TrackMLPClassifier(input_size=12, hidden_size=128, num_layers=3)
 
     model.load_state_dict(torch.load(args.model_checkpoint, map_location=device)['model_state_dict'], strict=False)
+    log_model_info(model)
 
     # Logging setup
-    if rank == 0:
+    if rank == 0 or args.world_size == 1:
         if args.run_name:
             wandb.init(project="EvalTrackMLPClassifier", name=args.run_name)
         else:
             wandb.init(project="EvalTrackMLPClassifier")
         # wandb.config.update(args)
         wandb.watch(model)
-        logging.basicConfig(filename=os.path.join(args.workdir, 'testing.log'), level=logging.INFO)
 
     # Output directory
     if not os.path.exists(args.workdir):
@@ -254,10 +287,20 @@ if __name__ == "__main__":
     parser.add_argument('--cpu', action="store_true", help="Use CPU for inference")
     parser.add_argument('--world_size', type=int, default=1, help="Number of GPUs for distributed inference")
     parser.add_argument('--pc', action="store_true", help="Use point clouds")
+    parser.add_argument('--voxel', action="store_true", help="Use point clouds")
     parser.add_argument('--track_pc', action="store_true", help="Use point clouds")
     parser.add_argument('--run_name', type=str, default='', help="wandb run name")
+    parser.add_argument("--local-rank", type=int, default=0)
 
     args = parser.parse_args()
+    if "LOCAL_RANK" not in os.environ:
+        os.environ["LOCAL_RANK"] = str(args.local_rank)
+
+    args = parser.parse_args()
+
+    if args.local_rank == 0 or args.world_size == 1:
+        setup_logging(os.path.join(args.workdir, 'testing.log'))
+
 
     from ipdb import launch_ipdb_on_exception, set_trace
     with launch_ipdb_on_exception():

@@ -6,8 +6,10 @@ import cupy as cp  # Use CuPy for GPU processing
 import open3d as o3d
 import tqdm
 import torch
+from functools import reduce
 import numpy as np
 from pyquaternion import Quaternion
+from det3d.datasets.pipelines.loading import read_sweep
 
 from nuscenes.nuscenes import NuScenes
 from nuscenes.utils.data_classes import LidarPointCloud
@@ -61,7 +63,56 @@ def farthest_point_sampling(points, num_samples):
     return points[matching_indices, :]
 
 
-def save_point_cloud(token, output_path, nusc, max_points=5000):
+def get_sweep_data(nusc, lidar_data):
+    # Get the path to the LIDAR_TOP point cloud data file (in .pcd.bin format)
+    point_cloud_path = os.path.join(nusc.dataroot, lidar_data['filename'])
+
+    curr_sd_rec = nusc.get("sample_data", lidar_data["prev"])
+    ref_time = 1e-6 * lidar_data["timestamp"]
+    time_lag = ref_time - 1e-6 * curr_sd_rec["timestamp"]
+    
+    ref_cs_rec = nusc.get(
+            "calibrated_sensor", lidar_data["calibrated_sensor_token"])
+    current_cs_rec = nusc.get(
+        "calibrated_sensor", curr_sd_rec["calibrated_sensor_token"])
+    ref_pose_rec = nusc.get("ego_pose", lidar_data["ego_pose_token"])
+    current_pose_rec = nusc.get("ego_pose", curr_sd_rec["ego_pose_token"])
+
+
+    ref_from_car = transform_matrix(
+            ref_cs_rec["translation"], Quaternion(ref_cs_rec["rotation"]), inverse=True
+    )
+    car_from_current = transform_matrix(
+                    current_cs_rec["translation"],
+                    Quaternion(current_cs_rec["rotation"]),
+                    inverse=False,
+    )
+    # Homogeneous transformation matrix from global to _current_ ego car frame
+    car_from_global = transform_matrix(
+        ref_pose_rec["translation"],
+        Quaternion(ref_pose_rec["rotation"]),
+        inverse=True,
+    )
+    global_from_car = transform_matrix(
+                    current_pose_rec["translation"],
+                    Quaternion(current_pose_rec["rotation"]),
+                    inverse=False,
+    )
+    tm = reduce(np.dot,
+                [ref_from_car, car_from_global, global_from_car,
+                 car_from_current],
+                )
+
+    sweep = dict(
+        lidar_path=point_cloud_path,
+        transform_matrix=tm,
+        time_lag=time_lag,
+    )
+
+    return sweep
+
+
+def save_point_cloud(token, output_path, nusc, max_points=15000):
     """
     Loads the point cloud for a given sample token and saves it as an .npy file.
 
@@ -73,14 +124,16 @@ def save_point_cloud(token, output_path, nusc, max_points=5000):
     sample = nusc.get('sample', token)
     lidar_data = nusc.get('sample_data', sample['data']['LIDAR_TOP'])
     
-    # Get the path to the LIDAR_TOP point cloud data file (in .pcd.bin format)
     point_cloud_path = os.path.join(nusc.dataroot, lidar_data['filename'])
+    sweep = get_sweep_data(nusc, lidar_data) if lidar_data['prev'] != "" else dict(time_lag=0, transform_matrix=None, lidar_path=point_cloud_path)
+    points_sweep, times_sweep = read_sweep(sweep, virtual=False)
+    point_cloud = np.hstack([points_sweep, times_sweep])
 
     # Load the point cloud
-    point_cloud = LidarPointCloud.from_file(point_cloud_path)
+    # point_cloud = LidarPointCloud.from_file(point_cloud_path)
 
     # Convert the point cloud to a CuPy array
-    points = cp.asarray(point_cloud.points.T)  # Shape (N, 4) if you want to include intensity
+    points = cp.asarray(point_cloud)  # Shape (N, 4) if you want to include intensity
     if len(points) > max_points:
         points = farthest_point_sampling(points, max_points)
     else:
@@ -123,7 +176,7 @@ def create_tracks(detection_results, nusc):
                     pointcloud_path = os.path.join(nusc.dataroot, sd_record['filename'])
                     pointcloud = LidarPointCloud.from_file(pointcloud_path)
                     pointcloud = cp.asarray(pointcloud.points.T)
-                    pointcloud = farthest_point_sampling(pointcloud, num_samples=5000).get()
+                    pointcloud = farthest_point_sampling(pointcloud, num_samples=15000).get()
                 
                 pointcloud_cache[sample_token] = pointcloud
 
@@ -369,55 +422,69 @@ def main():
     # Load the JSON file
     hz20 = False
     gt = False
-    extract_pcs = False
+    extract_pcs = True
     val = True
-    input_file = '/workspace/CenterPoint/work_dirs/immo/cp_valset/results_tp.json' # '/workspace/CenterPoint/work_dirs/immo/cp_5_seed_20hz/merged_results_tp.json'
+    # TODO ALWAYS USE results_tp
+    immo_results = '/workspace/CenterPoint/work_dirs/immo/cp_valset/cp_results.json' # '/workspace/CenterPoint/work_dirs/immo/cp_5_seed_20hz/merged_results_tp.json'
+    cp_det_file = "/workspace/CenterPoint/work_dirs/5_nusc_centerpoint_voxelnet_0075voxel_fix_bn_z/eval_on_seed/2Hz/baseline_SCs_03Mean/infos_train_10sweeps_withvelo_filter_True.json"
 
     # for 20 Hz
     # TODO for merged_results: run fix, extract pointclouds to npy for NK frames, adjust number of lidar points for NK
     if hz20:
-        fix_immortal_detections(input_file)
+        fix_immortal_detections(immo_results)
     
     nusc = NuScenes(version='v1.0-trainval', dataroot="data/nuScenes", verbose=True)
 
-    detection_results = load_json(input_file)
-
-    # remove empty preds
-    ks = detection_results['results'].keys()
-    for k in ks:
-        if detection_results['results'][k] == [] or detection_results['results'][k] == [[]]:
-            del detection_results['results'][k]
+    detection_results = load_json(immo_results)
 
     # set_trace()
     ## Save pointclouds as npy
     if extract_pcs:
         tokens = detection_results['results'].keys()
-        convert_pc_npy(output_directory='/workspace/CenterPoint/work_dirs/PCs_npy/train', nusc=nusc, tokens=tokens)
+        convert_pc_npy(output_directory='/workspace/CenterPoint/work_dirs/PCs_npy/val', nusc=nusc, tokens=tokens)
 
-    p_tracks = create_tracks(detection_results, nusc)
-    save_json(p_tracks, input_file.replace('results', 'track_info'), cls=NpEncoder)
+    return
+
+    # remove empty preds
+    ks = list(detection_results['results'].keys())
+    org_keys = load_json(cp_det_file)['results'].keys()
+    print(f"Length of frames BEFORE removal: {len(ks)}")
+    for k in ks:
+        if k not in org_keys:
+            del detection_results['results'][k]    
+        elif detection_results['results'][k] == [] or detection_results['results'][k] == [[]]:
+            del detection_results['results'][k]
+    
+    ks = list(detection_results['results'].keys())
+    print(f"Length of frames AFTER removal: {len(ks)}")
+
+    num_det_no_dummy = len([v for values in detection_results['results'].values() for v in values if v['TP'] != -500])
+    print(f"Number of non dummy items in dets is {num_det_no_dummy}")
 
     ## Create GT tracks
     if gt:
         tokens = list(detection_results['results'].keys())
         gt_tracks = extract_gt_tracks(nusc, tokens)
-        save_json(gt_tracks, input_file.replace('results', 'gt_track_info'), cls=NpEncoder)
+        save_json(gt_tracks, immo_results.replace('results', 'gt_track_info'), cls=NpEncoder)
+    else:
+        p_tracks = create_tracks(detection_results, nusc)
+        save_json(p_tracks, immo_results.replace('results', 'track_info'), cls=NpEncoder)
 
     ## scene to track mapping
     if gt:
-        input_file = input_file.replace('results', 'gt_track_info')
+        immo_results = immo_results.replace('results', 'gt_track_info')
     else:
-        input_file = input_file.replace('results', 'track_info')
+        immo_results = immo_results.replace('results', 'track_info')
     scene_names = create_splits_scenes()['val'] if val else torch.load('/workspace/CenterPoint/work_dirs/5_nusc_centerpoint_voxelnet_0075voxel_fix_bn_z/train_indices.pth')
-    tracks = load_json(input_file)
+    tracks = load_json(immo_results)
     scene_mapping = create_scene_track_mapping(nusc, scene_names, tracks)
-    save_json(scene_mapping, input_file.replace('track_info_tp', 'scene2trackname'))
+    save_json(scene_mapping, immo_results.replace('track_info_tp', 'scene2trackname'))
 
-    scene_file = input_file.replace('track_info_tp', 'scene2trackname')
+    scene_file = immo_results.replace('track_info_tp', 'scene2trackname')
     map_scene_track = load_json(scene_file)
-    tracks = load_json(input_file)
+    tracks = load_json(immo_results)
     padded_tracks = padd_scene_tracks(nusc, map_scene_track, tracks)
-    save_json(padded_tracks, input_file.replace('track_info_tp', 'track_info_tp_padded_tracks'))
+    save_json(padded_tracks, immo_results.replace('track_info_tp', 'track_info_tp_padded_tracks'))
 
 if __name__ == "__main__":
     from ipdb import launch_ipdb_on_exception, set_trace

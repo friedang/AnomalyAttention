@@ -218,15 +218,21 @@ output_json_path = "/workspace/CenterPoint/work_dirs/immo/cp_5_seed_2hz/merged_r
 # Merge data and save
 from ipdb import launch_ipdb_on_exception, set_trace
 with launch_ipdb_on_exception():
+    # Do after ImmoTracker results generation - Add detection_name
     # tracking_to_detection('/workspace/CenterPoint/work_dirs/immo/results/results.json') #inference_results
     
+    # Add tracking_name from detection_name
     # detection_to_tracking("/workspace/CenterPoint/work_dirs/immo/results/results.json")
-    
     # merge_2hz_and_20hz_files(keyframe_json_path, non_keyframe_json_path, output_json_path)
 
-    update_results(cp_det_path='/workspace/CenterPoint/work_dirs/ad_mlp_05/Resnet_baseline_with_Focal_gt/val_aug/new_nusc_validation/cp_results.json', 
-                   results_path='/workspace/CenterPoint/work_dirs/ad_pc_mlp_05/val_aug/nusc_validation/inference_results.json')
-
+    import argparse
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--res_path', type=str, default=None)
+    args = parser.parse_args()
+    if args.res_path:
+        update_results(cp_det_path='/workspace/CenterPoint/work_dirs/immo/cp_valset/cp_results.json', 
+                       results_path=args.res_path)
+                                # args.res_path
     ## merge seed and pseudo
     # data = update_data(pickle_files[0], pickle_files[1])
 

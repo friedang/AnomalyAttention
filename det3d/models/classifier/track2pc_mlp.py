@@ -25,7 +25,7 @@ class Track2PCTrackMLPClassifier(nn.Module):
 
         # Track2PC
         self.track_fc = nn.Linear(input_size*chunk_size, 256)
-        self.fc4 = nn.Linear(1079, 512)
+        self.fc4 = nn.Linear(1084, 512)
         self.fc5 = nn.Linear(512, 256)
         self.fc6 = nn.Linear(256, hidden_size)
         self.bn4 = nn.LayerNorm(512)
@@ -33,7 +33,7 @@ class Track2PCTrackMLPClassifier(nn.Module):
 
 
         # PointNet
-        self.pc_en = PointNetEncoder(global_feat=True, feature_transform=True, channel=4)
+        self.pc_en = PointNetEncoder(global_feat=True, feature_transform=True, channel=5)
         self.fc1 = nn.Linear(1024, 512)
         self.fc2 = nn.Linear(512, 256)
         self.fc3 = nn.Linear(256, hidden_size)

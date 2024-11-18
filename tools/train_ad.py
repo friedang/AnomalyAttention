@@ -18,6 +18,7 @@ import logging
 from det3d.datasets.nuscenes.nuscenes_track_dataset import SceneDataset
 from det3d.models.classifier.mlp import TrackMLPClassifier
 from det3d.models.classifier.pc_mlp import PCTrackMLPClassifier
+from det3d.models.classifier.voxel_mlp import VoxelTrackMLPClassifier
 from det3d.models.classifier.track2pc_mlp import Track2PCTrackMLPClassifier
 
 
@@ -67,6 +68,42 @@ class FocalLoss(nn.Module):
         else:
             return focal_loss
 
+
+def setup_logging(log_file):
+    # Create a logger
+    logger = logging.getLogger()
+    logger.setLevel(logging.INFO)  # Set the logging level
+
+    # File handler to log to a file
+    file_handler = logging.FileHandler(log_file)
+    file_handler.setLevel(logging.INFO)
+    file_formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
+    file_handler.setFormatter(file_formatter)
+
+    # Stream handler to log to the console
+    console_handler = logging.StreamHandler()
+    console_handler.setLevel(logging.INFO)
+    console_formatter = logging.Formatter('%(levelname)s - %(message)s')
+    console_handler.setFormatter(console_formatter)
+
+    # Add both handlers to the logger
+    logger.addHandler(file_handler)
+    logger.addHandler(console_handler)
+
+
+def log_model_info(model):
+    # Log the model architecture
+    logging.info("Model Architecture:\n%s", model)
+    
+    # Calculate the number of parameters
+    num_params = sum(p.numel() for p in model.parameters())
+    logging.info("Number of parameters: %d", num_params)
+    
+    # Calculate the model size in MB
+    model_size_mb = sum(p.element_size() * p.numel() for p in model.parameters()) / (1024 ** 2)
+    logging.info("Model size: %.2f MB", model_size_mb)
+
+
 def save_gradients(grad):
     # Visualize or save the gradient values to check them later
     grad_mean = grad.mean().item()
@@ -91,8 +128,8 @@ def validate(model, dataloader, device, class_weights):
             tp, meta, inputs = batch
             tp, inputs = tp.to(device), inputs.to(device)
 
-            if args.pc or args.track_pc:
-                tokens, _, _ = meta
+            if args.pc or args.track_pc or args.voxel:
+                tokens, _ = meta
                 token_len = len(tokens[0])
                 pc_batch = []
                 for i in range(token_len):
@@ -100,30 +137,14 @@ def validate(model, dataloader, device, class_weights):
                     for t in tokens:
                         if t[i] != "dummy":
                             pointcloud_path = Path('/workspace/CenterPoint/work_dirs/PCs_npy/train') / f"{t[i]}.npy"
-                            pc_batch.append(np.load(str(pointcloud_path)).reshape(4, 5000))
+                            pc_batch.append(np.load(str(pointcloud_path)).reshape(5, 15000))
                             dummy_status = False
                             break
                     if dummy_status:
-                        pc_batch.append(np.zeros((4, 5000)))
+                        pc_batch.append(np.zeros((5, 15000)))
                     
                 pc_batch = torch.tensor(np.stack(pc_batch, axis=0)).float().to(device)
-                
-                # tokens, _, _ = meta
-                # token_len = len(tokens[0])
-                # pc_batch = []
-                # for i in range(token_len):
-                #     pc_data = []
-                #     for t in tokens:
-                #         if t[i] == "dummy":
-                #             pc_data.append(np.zeros((4, 5000)))
-                #         else:
-                #             pointcloud_path = Path('/workspace/CenterPoint/work_dirs/PCs_npy/train') / f"{t[i]}.npy"
-                #             pc_data.append(np.load(str(pointcloud_path)).reshape(4, 5000))
-                    
-                #     pc_batch.append(np.concatenate(pc_data, axis=1))
-                
-                # pc_batch = torch.tensor(np.stack(pc_batch, axis=0)).float().to(device)
-                
+                          
                 inputs = (inputs, pc_batch)
 
             # Mask where TP is not padding (-500)
@@ -166,11 +187,11 @@ def train(rank, world_size, args):
         shutil.copy(args.scenes_info.replace('scene2trackname.json', 'train_chunks.pt'), args.workdir)
 
     # assert train_dataset.chunks != val_dataset.chunks
-    print(f"Training on {len(train_dataset)} samples - Validation on {len(val_dataset)} samples.")
+    logging.info(f"Training on {len(train_dataset)} samples - Validation on {len(val_dataset)} samples.")
     label_arrays = [tp[0][tp[0] != -500].cpu().numpy() for tp in train_dataset.chunks]
     
     # creating class weights
-    print('FOR TRAINING')
+    logging.info('FOR TRAINING')
     data = []
     for l in label_arrays:
         data.extend(l)
@@ -178,10 +199,10 @@ def train(rank, world_size, args):
     num_1 = len([i for i in data if i == 1])
     num_0 = len([i for i in data if i == 0])
     class_weights = compute_class_weight('balanced', classes=np.array([0, 1]), y=data)
-    print(f"# FP samples: {num_0} - # TP samples: {num_1} - Class weights are {class_weights}")
-    class_weights = [class_weights[1], class_weights[0]]
+    logging.info(f"# FP samples: {num_0} - # TP samples: {num_1} - Class weights are {class_weights}")
+    # class_weights = [class_weights[1], class_weights[0]]
 
-    print('FOR VALIDATION')
+    logging.info('FOR VALIDATION')
     label_arrays = [tp[0][tp[0] != -500].cpu().numpy() for tp in val_dataset.chunks]
     data = []
     for l in label_arrays:
@@ -189,7 +210,8 @@ def train(rank, world_size, args):
     data = np.array(data)
     num_1 = len([i for i in data if i == 1])
     num_0 = len([i for i in data if i == 0])
-    print(f"# FP samples: {num_0} - # TP samples: {num_1} - Class weights are {class_weights}")
+    not_used_weights = compute_class_weight('balanced', classes=np.array([0, 1]), y=data)
+    logging.info(f"# FP samples: {num_0} - # TP samples: {num_1} - Class weights are {not_used_weights}")
 
     # Set up samplers for distributed training
     # set_trace()
@@ -202,11 +224,13 @@ def train(rank, world_size, args):
 
     # Instantiate the model and move to device
     if args.track_pc:
-        model = Track2PCTrackMLPClassifier(input_size=11, hidden_size=128, num_layers=3)
+        model = Track2PCTrackMLPClassifier(input_size=12, hidden_size=128, num_layers=3)
     elif args.pc:
-        model = PCTrackMLPClassifier(input_size=11, hidden_size=128, num_layers=3)
+        model = PCTrackMLPClassifier(input_size=12, hidden_size=128, num_layers=3)
+    elif args.voxel:
+        model = VoxelTrackMLPClassifier(input_size=12, hidden_size=128, num_layers=3)
     else:
-        model = TrackMLPClassifier(input_size=11, hidden_size=128, num_layers=3)
+        model = TrackMLPClassifier(input_size=12, hidden_size=128, num_layers=3)
 
     device = torch.device(f'cuda:{rank}' if (not args.cpu) and torch.cuda.is_available() else 'cpu')
     model.to(device)
@@ -228,14 +252,15 @@ def train(rank, world_size, args):
         start_epoch = 0
 
     # Logging setup
-    if rank == 0:
+    if rank == 0 or args.world_size == 1:
         if args.run_name:
             wandb.init(project="TrackMLPClassifier", name=args.run_name)
         else:
             wandb.init(project="TrackMLPClassifier")
         # wandb.config.update(args)
         wandb.watch(model)
-        logging.basicConfig(filename=os.path.join(args.workdir, 'training.log'), level=logging.INFO)
+    
+    log_model_info(model)
 
     # Training loop
     for epoch in range(start_epoch, args.epochs):
@@ -251,8 +276,8 @@ def train(rank, world_size, args):
             tp, meta, inputs = batch
             tp, inputs = tp.to(device), inputs.to(device)
 
-            if args.pc or args.track_pc:
-                tokens, _, _ = meta
+            if args.pc or args.track_pc or args.voxel:
+                tokens, _ = meta
                 token_len = len(tokens[0])
                 pc_batch = []
 
@@ -261,36 +286,21 @@ def train(rank, world_size, args):
                     for t in tokens:
                         if t[i] != "dummy":
                             pointcloud_path = Path('/workspace/CenterPoint/work_dirs/PCs_npy/train') / f"{t[i]}.npy"
-                            pc_batch.append(np.load(str(pointcloud_path)).reshape(4, 5000))
+                            pc_batch.append(np.load(str(pointcloud_path)).T)
                             dummy_status = False
                             break
                     if dummy_status:
-                        pc_batch.append(np.zeros((4, 5000)))
+                        pc_batch.append(np.zeros((5, 15000))) # TODO maybe change this hardcoded number; load pc and set shape
                     
                 pc_batch = torch.tensor(np.stack(pc_batch, axis=0)).float().to(device)
-
-                # for i in range(token_len):
-                #     pc_data = []
-                #     for t in tokens:
-                #         if t[i] == "dummy":
-                #             pc_data.append(np.zeros((4, 5000)))
-                #         else:
-                #             pointcloud_path = Path('/workspace/CenterPoint/work_dirs/PCs_npy/train') / f"{t[i]}.npy"
-                #             pc_data.append(np.load(str(pointcloud_path)).reshape(4, 5000))
-                    
-                #     pc_batch.append(np.concatenate(pc_data, axis=1))
-                
-                # pc_batch = torch.tensor(np.stack(pc_batch, axis=0)).float().to(device)
                 
                 inputs = (inputs, pc_batch)
-
-            # Mask where TP is not padding (-500)
-            mask = (tp != -500).float()
 
             # Forward pass
             outputs = model(inputs)
 
-            # Mask labels and predictions
+            # Mask where TP is not padding (-500)
+            mask = (tp != -500).float()
             masked_outputs = outputs[mask.bool()] # outputs * mask
             masked_labels = tp[mask.bool()] # tp * mask
 
@@ -307,8 +317,8 @@ def train(rank, world_size, args):
         #         param.register_hook(save_gradients)
 
 
-        if rank == 0:  # Only the master node logs
-            if (epoch + 1) % 10 == 0:
+        if rank == 0 or args.world_size == 1:  # Only the master node logs
+            if (epoch + 1) % 5 == 0:
                 # Validation step
                 val_loss = validate(model, val_loader, device, class_weights)
 
@@ -337,7 +347,7 @@ if __name__ == "__main__":
     "TRAINING AERGS"
     parser = argparse.ArgumentParser()
     parser.add_argument('--epochs', type=int, default=100, help="Number of training epochs")
-    parser.add_argument('--batch_size', type=int, default=16, help="Batch size per GPU")
+    parser.add_argument('--batch_size', type=int, default=42, help="Batch size per GPU") # 22 for non freezed
     parser.add_argument('--lr', type=float, default=1e-4, help="Learning rate")
     parser.add_argument('--world_size', type=int, default=1, help="Number of GPUs for distributed training")
     parser.add_argument('--scenes_info', type=str, help="Path to scenes info")
@@ -346,13 +356,20 @@ if __name__ == "__main__":
     parser.add_argument('--gt', action="store_true", help="Use GT track info")
     parser.add_argument('--pc', action="store_true", help="Use point clouds")
     parser.add_argument('--track_pc', action="store_true", help="Use point clouds")
+    parser.add_argument('--voxel', action="store_true", help="Use point clouds")
     parser.add_argument('--cpu', action="store_true", help="Use CPU")
     parser.add_argument('--load_chunks_from', type=str, help="Use GT track info")
     parser.add_argument('--workdir', type=str, required=True, help="Directory to workdir")
     parser.add_argument('--resume-from', type=str, help="Checkpoint resume from file")
     parser.add_argument('--sample_ratio', type=float, default=0.85, help="Ratio for training/validation")
+    parser.add_argument("--local-rank", type=int, default=0)
 
     args = parser.parse_args()
+    if "LOCAL_RANK" not in os.environ:
+        os.environ["LOCAL_RANK"] = str(args.local_rank)
+
+    if args.local_rank == 0 or args.world_size == 1:
+            setup_logging(os.path.join(args.workdir, 'training.log'))
 
     if not os.path.isdir(args.workdir):
         os.mkdir(args.workdir)

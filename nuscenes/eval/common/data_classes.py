@@ -133,8 +133,7 @@ class EvalBoxes:
         for sample_token, boxes in content.items():
             # if boxes == []:
             #     continue
-            first_value = boxes[0]
-            ad_check = True if filter_ad and 'TP' in first_value.keys() else False
+            ad_check = True if boxes != [] and filter_ad and 'TP' in boxes[0].keys() else False
             if ad_check:
                 # import ipdb; ipdb.set_trace()
                 eb.add_boxes(sample_token, [box_cls.deserialize(box) for box in boxes if box['TP'] == 1])

@@ -112,7 +112,8 @@ class RPN(nn.Module):
         self.blocks = nn.ModuleList(blocks)
         self.deblocks = nn.ModuleList(deblocks)
 
-        logger.info("Finish RPN Initialization")
+        if logger:
+            logger.info("Finish RPN Initialization")
 
     @property
     def downsample_factor(self):
