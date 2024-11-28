@@ -127,7 +127,7 @@ def main(args):
     if args.load_preds:
         predictions = []
         result_dict, _ = dataset.evaluation(
-            copy.deepcopy(predictions), output_dir=args.work_dir, testset=args.testset, train=args.train, res_path=args.load_preds)
+            copy.deepcopy(predictions), output_dir=args.work_dir, testset=args.testset, train=args.train, res_path=args.load_preds, filter_ad=args.filter_ad)
         if result_dict is not None:
             for k, v in result_dict["results"].items():
                 print(f"Evaluation {k}: {v}")

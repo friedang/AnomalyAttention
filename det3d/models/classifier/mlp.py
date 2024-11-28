@@ -1,9 +1,8 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from ..registry import DETECTORS
 
-@DETECTORS.register_module
+
 class TrackMLPClassifier(nn.Module):
     def __init__(self, input_size=12, hidden_size=128, num_layers=3, dropout=0):
         """

@@ -11,6 +11,63 @@ from det3d.models.necks import RPN
 # from det3d.torchie import Config
 
 
+class TrackMLP(nn.Module):
+    def __init__(self, input_dim, hidden_dim, output_dim, dropout=0.3):
+        super(TrackMLP, self).__init__()
+        self.mlp = nn.Sequential(
+            nn.Linear(input_dim, hidden_dim),
+            nn.ReLU(),
+            nn.Dropout(dropout),
+            nn.Linear(hidden_dim, hidden_dim),
+            nn.ReLU(),
+            nn.Dropout(dropout),
+            nn.Linear(hidden_dim, output_dim),
+            nn.ReLU(),
+        )
+
+    def forward(self, x):
+        """
+        Input: track features of shape (batch_size, num_tracks, feature_dim)
+        """
+        batch_size, num_tracks, feature_dim = x.size()
+        x = self.mlp(x.view(-1, feature_dim))  # Shape: (batch_size * num_tracks, output_dim)
+        return x.view(batch_size, num_tracks, -1)  # Reshape to (batch_size, num_tracks, output_dim)
+
+
+class CrossAttentionFusion(nn.Module):
+    def __init__(self, voxel_feature_dim, mlp_feature_dim, fused_dim):
+        super(CrossAttentionFusion, self).__init__()
+        self.query_proj = nn.Linear(mlp_feature_dim, fused_dim)
+        self.key_proj = nn.Linear(voxel_feature_dim, fused_dim)
+        self.value_proj = nn.Linear(voxel_feature_dim, fused_dim)
+        self.output_proj = nn.Linear(fused_dim, fused_dim)
+        self.softmax = nn.Softmax(dim=-1)
+
+    def forward(self, track_features, voxel_features):
+        """
+        Inputs:
+          - track_features: (batch_size, num_tracks, mlp_feature_dim)
+          - voxel_features: (batch_size, voxel_feature_dim, height, width)
+        """
+        # Reshape voxel features to match track dimensions
+        batch_size, voxel_dim, height, width = voxel_features.size()
+        voxel_features_flat = voxel_features.view(batch_size, voxel_dim, -1)  # (batch_size, voxel_feature_dim, height*width)
+        voxel_features_flat = voxel_features_flat.permute(0, 2, 1)  # (batch_size, height*width, voxel_feature_dim)
+
+        queries = self.query_proj(track_features)  # (batch_size, num_tracks, fused_dim)
+        keys = self.key_proj(voxel_features_flat)  # (batch_size, height*width, fused_dim)
+        values = self.value_proj(voxel_features_flat)  # (batch_size, height*width, fused_dim)
+
+        # Cross-attention
+        attention = torch.matmul(queries, keys.transpose(-1, -2))  # (batch_size, num_tracks, height*width)
+        attention = self.softmax(attention)
+        attended_values = torch.matmul(attention, values)  # (batch_size, num_tracks, fused_dim)
+
+        # Residual connection
+        fused_features = self.output_proj(attended_values + queries)  # Residual fusion
+
+        return fused_features
+
 class Voxelization(object):
     def __init__(self, **kwargs):
         self.range = [-54, -54, -5.0, 54, 54, 3.0]
@@ -52,7 +109,7 @@ class Voxelization(object):
 
 
 class VoxelTrackMLPClassifier(nn.Module):
-    def __init__(self, input_size=12, hidden_size=128, num_layers=3, dropout=0, track_len=5):
+    def __init__(self, input_size=12, hidden_size=128, num_layers=3, dropout=0.1, track_len=5):
         """
         A simple MLP for binary classification of TP/FP based on tracking data.
         Args:
@@ -69,32 +126,39 @@ class VoxelTrackMLPClassifier(nn.Module):
         self.dropout = dropout
         self.track_len = track_len
 
-        # Input layer
-        self.input_layer = nn.Linear(input_size, hidden_size)
-
-        # Hidden layers
-        self.hidden_layers = nn.ModuleList([
-            nn.Linear(hidden_size, hidden_size) for _ in range(num_layers)
-        ])
-
         # Output layer (binary classification)
         self.output_layer = nn.Linear(hidden_size * 2, 1)
 
-        # VoxelNet Head
-        # conv_size = [[512, 256], [256, 128], [128, 64]]
-        self.voxel_conv = nn.Sequential(
-            nn.Conv2d(512, 328, kernel_size=3, stride=1, padding=1, bias=True),
+        mlp_feature_dim=128
+        track_input_dim=input_size
+        voxel_feature_dim=512
+        fused_dim=256
+        self.track_mlp = TrackMLP(track_input_dim, mlp_feature_dim, mlp_feature_dim)
+        self.fusion_layer = CrossAttentionFusion(voxel_feature_dim, mlp_feature_dim, fused_dim)
+        
+        self.lstm = nn.LSTM(
+            input_size=fused_dim,
+            hidden_size=hidden_size,
+            num_layers=num_layers,
+            batch_first=True,
+            dropout=dropout,
+            bidirectional=True
         )
-        conv_size = [[369, 164], [164, 82], [82, 41]]
-        self.conv = nn.Sequential()
-        for i, size in enumerate(conv_size):
-            ks = [3, 1, 1] if i == 0 else [3, 3, 0]
-            self.conv.append(
-                nn.Conv2d(size[0], size[1], kernel_size=ks[0], stride=ks[1], padding=ks[2], bias=True))
-            self.conv.append(nn.BatchNorm2d(size[1]))
-            self.conv.append(nn.ReLU(inplace=True)
-                             )
-        self.fc = nn.Linear(20 * 20, hidden_size)
+
+        self.multihead_attention = nn.MultiheadAttention(
+            embed_dim=fused_dim, 
+            num_heads=16, 
+            dropout=dropout, 
+            batch_first=True
+        )
+
+        # Final classification head
+        self.classifier = nn.Sequential(
+            nn.Linear(fused_dim, hidden_size),
+            nn.LeakyReLU(),
+            nn.Dropout(dropout),
+            nn.Linear(hidden_size, 1)
+        )
 
         self._initialize_weights()
 
@@ -120,8 +184,8 @@ class VoxelTrackMLPClassifier(nn.Module):
         self.neck.load_state_dict(neck_checkpoint)
 
         # Freeze weights of specific modules
-        self.freeze_module(self.backbone)
-        self.freeze_module(self.neck)
+        # self.freeze_module(self.backbone)
+        # self.freeze_module(self.neck)
 
 
     def freeze_module(self, module):
@@ -177,52 +241,22 @@ class VoxelTrackMLPClassifier(nn.Module):
         voxel_feat, _ = self.backbone(
                 input_features, data["coors"], data["batch_size"], data["input_shape"]
         )
-        voxel_feat = self.neck(voxel_feat)
-        
-        pc = self.voxel_conv(voxel_feat) # batch_size, 128, 59, 59
-        # conv_feat_for_mlp = conv_feat.view(batch_size * conv_feat.shape[1], -1)
-        # conv_feat_for_mlp = conv_feat.view(batch_size * conv_feat.shape[1], 
-        #                                    conv_feat.shape[2], conv_feat.shape[3])
+        voxel_features = self.neck(voxel_feat)
+
+        # Process track features
+        track_features = self.track_mlp(x)  # (batch_size, 41, mlp_feature_dim)
+
+        # Fuse features
+        fused_features = self.fusion_layer(track_features, voxel_features)  # (batch_size, 41, fused_dim)
+
+        # Temporal encoding with LSTM
         # import ipdb; ipdb.set_trace()
-        # pc = self.fc_vox(conv_feat_for_mlp)
+        lstm_output, _ = self.lstm(fused_features)
 
+        # Optional Multi-Head Attention
+        mha_output, _ = self.multihead_attention(lstm_output, lstm_output, lstm_output)
 
-        # Track Branch
-        # Flatten the input (batch_size * num_tracks, input_size)
-        x = x.view(-1, input_size)
+        # Classification
+        logits = self.classifier(mha_output)
 
-        # Input layer
-        x_in = F.leaky_relu(self.input_layer(x))
-
-        # Hidden layers
-        for i, layer in enumerate(self.hidden_layers):
-            x_out = F.leaky_relu(layer(x_in))
-            x_in = x_out + x_in
-            # x = self.dropout_layer(x)
-
-        # x_in torch.Size([1230, 128]) is (batch_size * num_tracks, 128)
-        x_in = x_in.view(batch_size, num_tracks, x_in.shape[1])
-        x_residual = x_in
-        x_in = x_in.unsqueeze(-1).repeat(1, 1, 1, x_in.shape[2])
-
-        # Classification Head
-        # Output layer
-        if x_in.shape[-1] < pc.shape[-1]: 
-            diff = (x_in.shape[-1] + pc.shape[-1] - 1) // x_in.shape[-1]
-            diff = diff if diff != 1 else 2
-            x_in = x_in.repeat(1, 1, diff, diff)
-            x_in = x_in[:, :, :pc.shape[-1], :pc.shape[-1]]
-
-        final_out = torch.cat([x_in, pc], axis=1)
-        final_out = self.conv(final_out)
-
-        final_out = final_out.view(batch_size, num_tracks, -1)
-        final_out = self.fc(final_out)
-        final_out = torch.cat([x_residual, final_out], axis=2)
-        output = self.output_layer(final_out)
-
-        # Reshape output to (batch_size, num_tracks, 1)
-        # output = x.view(batch_size, num_tracks, 1)
-        # import ipdb; ipdb.set_trace()
-
-        return output
+        return logits

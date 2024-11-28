@@ -114,31 +114,32 @@ def update_results(cp_det_path, results_path):
 
     print(f"Number of Detections before filtering is {len([v for values in res.values() for v in values])}") # if v['TP'] == 1])}")
     counter = 0
-    for k, v in res.items():
-        if v == []:
-            print("Add original result")
-            res[k] = data['results'][k]
-            continue
+    # for k, v in res.items():
+    #     if v == []:
+    #         print("Add original result")
+    #         res[k] = data['results'][k]
+    #         continue
         # if v != []:
         #     data['results'][k] = v
             
         # filter AD
-        vals = []
-        fp = []
-        for val in v:
-            if val['TP'] == 1:
-                vals.append(val)
-            else:
-                fp.append(val)
+        # vals = []
+        # fp = []
+        # for val in v:
+        #     if val['TP'] == 1:
+        #         vals.append(val)
+        #     else:
+        #         fp.append(val)
         
-        counter += len(fp)
-        res[k] = vals    
+        # counter += len(fp)
+        # res[k] = vals    
     
     print(f"Filtered out {counter} Detections labeled as FP")
     print(f"Number of Detections after filtering is {len([v for values in res.values() for v in values])}")
 
+    # set_trace()
     for k in data['results'].keys():
-        if k not in res.keys():
+        if k not in res.keys() or res[k] == []:
             res[k] = data['results'][k]
 
     length = [1 for t in res.values() if t != []]
@@ -148,7 +149,7 @@ def update_results(cp_det_path, results_path):
 
     data['results'] = res
 
-    with open(results_path.replace('inference_results', 'merged_results'), 'w') as f:
+    with open(results_path.replace('results', 'merged_results'), 'w') as f:
         json.dump(data, f)
 
 def extract_pseudo_gt(data_path, updates_path):
@@ -219,7 +220,7 @@ output_json_path = "/workspace/CenterPoint/work_dirs/immo/cp_5_seed_2hz/merged_r
 from ipdb import launch_ipdb_on_exception, set_trace
 with launch_ipdb_on_exception():
     # Do after ImmoTracker results generation - Add detection_name
-    # tracking_to_detection('/workspace/CenterPoint/work_dirs/immo/results/results.json') #inference_results
+    # tracking_to_detection('/workspace/CenterPoint/work_dirs/Center_point_original_nusc_0075_flip/immo_results/results.json') #inference_results
     
     # Add tracking_name from detection_name
     # detection_to_tracking("/workspace/CenterPoint/work_dirs/immo/results/results.json")

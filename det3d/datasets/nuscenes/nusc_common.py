@@ -737,6 +737,6 @@ def eval_main(nusc, eval_version, res_path, eval_set, output_dir, ad=True, filte
         eval_set=eval_set,
         output_dir=output_dir,
         verbose=True,
-        filter_ad=False
+        filter_ad=filter_ad
     )
     metrics_summary = nusc_eval.main(plot_examples=10,)

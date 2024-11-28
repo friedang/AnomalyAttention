@@ -180,118 +180,6 @@ class NuScenesDataset(PointCloudDataset):
             _nusc_infos_all = [i for i in _nusc_infos_all if i['timestamp'] in timestamps]
             print(f"New # of Frames is {len(_nusc_infos_all)}")
             print(f"New # of Scenes is {len(self.train_indices)}")
-
-            # nk_frames = []
-            # for scene in nusc.scene:
-            #     if scene['name'] not in self.train_indices:
-            #         continue
-            #     sample_token = scene['last_sample_token']
-            #     sample = nusc.get('sample', sample_token)
-            #     sd_token = sample['data']['LIDAR_TOP']
-            #     while sd_token:
-            #         sd_record = nusc.get('sample_data', sd_token)
-            #         if sd_record['is_key_frame']:
-            #             sd_token = sd_record['prev']
-            #             continue
-                    
-
-            #         sd_token = sd_record['prev']
-
-
-            if hz20:
-                from det3d.datasets.nuscenes.nusc_common import _fill_non_keyframe_infos
-                nk_frames = _fill_non_keyframe_infos(nusc, _nusc_infos_all)
-                # nk_frames = pickle.load(open("./work_dirs/5_nusc_centerpoint_voxelnet_0075voxel_fix_bn_z/nk_seed5.pkl", 'rb'))
-                for f in nk_frames:
-                    try:
-                        f['sample_token'] = f['sample_token'][0]
-                        print('fixed token')
-                    except:
-                        c=1
-                    
-                pickle.dump(nk_frames, open("./work_dirs/5_nusc_centerpoint_voxelnet_0075voxel_fix_bn_z/nk_seed5.pkl"))
-                    
-
-                    # also fix empty predictions
-                    # fix ignore gts
-                    
-
-            # if False:
-                # nk_frames = []
-                # k_frames = 0
-                # for info in _nusc_infos_all:
-                #     if nusc.get('sample_data', info['sweeps'][8]['sample_data_token'])['token'] == nusc.get('sample_data', info['sweeps'][2]['sample_data_token'])['token']:
-                #         continue
-                #     sample = nusc.get('sample', info['token'])
-                #     sd_token = sample['data']['LIDAR_TOP']
-                #     nk_info = info
-                #     for sweep in info['sweeps']:
-                #         set_trace()
-                #         nk = [sweep] * 9
-                #         nk_info['sweeps'] = nk
-                #         data = nusc.get('sample_data', sweep['sample_data_token'])
-                #         if data['is_key_frame']:
-                #             k_frames += 1
-                #             continue
-                #             set_trace()
-                #         # nk_info.update({k: v for k,v in data.items() if k in nk_info.keys()})
-                #         sample = nusc.get('sample', nusc.get('sample_data', info['sweeps'][8]['sample_data_token'])['sample_token'])
-                #         sd_token = sample['data']['LIDAR_TOP']
-                #         sd_record = nusc.get('sample_data', sd_token)
-                #         if sd_record['is_key_frame']:
-                #             continue
-
-                        
-
-                #         sd_token = sd_record['prev']
-                #         if not sd_token:
-                #             break
-
-                #         nk_info.update({k: v for k,v in sweep.items() if k in nk_info.keys()})
-                        
-                #         boxes = nusc.get_boxes(data['token'])
-                #         sd_record = nusc.get("sample_data", data['token'])
-                #         cs_record = nusc.get("calibrated_sensor", sd_record["calibrated_sensor_token"])
-                #         pose_record = nusc.get("ego_pose", sd_record["ego_pose_token"])
-                #         # Make list of Box objects including coord system transforms.
-                #         ref_boxes = []
-                #         for box in boxes:
-                #             box.velocity = nusc.box_velocity(box.token)
-                #             # Move box to ego vehicle coord system
-                #             box.translate(-np.array(pose_record["translation"]))
-                #             box.rotate(Quaternion(pose_record["rotation"]).inverse)
-
-                #             #  Move box to sensor coord system
-                #             box.translate(-np.array(cs_record["translation"]))
-                #             box.rotate(Quaternion(cs_record["rotation"]).inverse)
-
-                #             ref_boxes.append(box)
-
-                #         locs = np.array([b.center for b in ref_boxes]).reshape(-1, 3)
-                #         dims = np.array([b.wlh for b in ref_boxes]).reshape(-1, 3)
-                #         # rots = np.array([b.orientation.yaw_pitch_roll[0] for b in ref_boxes]).reshape(-1, 1)
-                #         velocity = np.array([b.velocity for b in ref_boxes]).reshape(-1, 3)
-                #         rots = np.array([quaternion_yaw(b.orientation) for b in ref_boxes]).reshape(
-                #             -1, 1
-                #         )
-                #         names = np.array([b.name for b in ref_boxes])
-                #         tokens = np.array([b.token for b in ref_boxes])
-                #         gt_boxes = np.concatenate(
-                #             [locs, dims, velocity[:, :2], -rots - np.pi / 2], axis=1
-                #         )
-
-                #         nk_info["gt_boxes"] = gt_boxes
-                #         nk_info["gt_boxes_velocity"] = velocity
-                #         nk_info["gt_names"] = np.array([general_to_detection[name] for name in names])
-                #         nk_info["gt_boxes_token"] = tokens
-
-                #         nk_frames.append(nk_info)
-
-        # _nusc_infos_all += nk_frames
-        # print(f"New # of Frames is {len(_nusc_infos_all)}")
-        # toks = [k['token'] for k in _nusc_infos_all]
-        # print(len(set(toks)))
-        # print(k_frames)
         
         if not self.test_mode:  # if training
             self.frac = int(len(_nusc_infos_all) * 0.25)
@@ -568,7 +456,7 @@ class NuScenesDataset(PointCloudDataset):
                 res_path,
                 eval_set_map[self.version],
                 output_dir,
-                filter_ad
+                filter_ad=filter_ad
             )
 
             with open(Path(output_dir) / "metrics_summary.json", "r") as f:

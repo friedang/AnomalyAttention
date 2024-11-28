@@ -15,7 +15,7 @@ def accumulate(gt_boxes: EvalBoxes,
                pred_boxes: EvalBoxes,
                class_name: str,
                dist_fcn: Callable,
-               dist_th: float = 4.0, # TODO [0.5, 1.0, 2.0, 4.0]
+            #    dist_th: float, # TODO [0.5, 1.0, 2.0, 4.0]
                verbose: bool = False) -> DetectionMetricData:
     """
     Average Precision over predefined different recall thresholds for a single distance threshold.
@@ -55,6 +55,8 @@ def accumulate(gt_boxes: EvalBoxes,
     # sortind = [i for (v, i) in sorted((v, i) for (i, v) in enumerate(pred_confs))][::-1]
 
     # Do the actual matching.
+    dist_thresholds = [0.5, 1.0, 2.0, 4.0]
+    dist_tps = [[], [], [], []]
     tp = []  # Accumulator of true positives.
     fp = []  # Accumulator of false positives.
     conf = []  # Accumulator of confidences.
@@ -86,8 +88,19 @@ def accumulate(gt_boxes: EvalBoxes,
                     match_gt_idx = gt_idx
 
         # If the closest match is close enough according to threshold we have a match!
-        is_match = min_dist < dist_th
+        for pos, th in enumerate(dist_thresholds):
 
+            is_match = min_dist < th
+            if is_match:
+                dist_tps[pos].append(1)
+            else:
+                dist_tps[pos].append(0)
+
+        # for distance 4.0
+        for j in range(len(dist_tps[0])):
+            if not all([dist_tps[i][j] <= dist_tps[i+1][j] for i in range(3)]):
+                print(dist_tps[0][j], dist_tps[1][j], dist_tps[2][j], dist_tps[3][j])
+        
         if is_match:
             taken.add((pred_box.sample_token, match_gt_idx))
 
@@ -123,7 +136,6 @@ def accumulate(gt_boxes: EvalBoxes,
     # ---------------------------------------------
     # Calculate and interpolate precision and recall
     # ---------------------------------------------
-
     # Accumulate.
     binary_tp_count = tp
     tp = np.cumsum(tp).astype(float)
@@ -170,7 +182,7 @@ def accumulate(gt_boxes: EvalBoxes,
                                orient_err=match_data['orient_err'],
                                attr_err=match_data['attr_err'],
                                ),
-            tokens)
+            tokens, dist_tps)
 
 
 def load_json(file_path):
@@ -220,21 +232,31 @@ def classify_detections(detection_results, nusc, eval_split, result_path, output
         dist_fcn = nusc_eval.cfg.dist_fcn_callable
 
         # Accumulate metrics
-        metric_data, tokens = accumulate(gt_boxes, pred_boxes, class_name, dist_fcn)
+        _, tokens, dist_tps = accumulate(gt_boxes, pred_boxes, class_name, dist_fcn)
 
         # Update TP classification
-        for sample_token, tp in zip(tokens, metric_data.binary_tp_count):
+        for i, sample_token in enumerate(tokens):
+            dist_TP = [dist_tps[j][i] for j in range(4)]
             if class_name not in tp_classification[sample_token]:
                 tp_classification[sample_token][class_name] = []
-            tp_classification[sample_token][class_name].append(int(tp))
+            tp_classification[sample_token][class_name].append(dist_TP)
 
+    # set_trace()
     # Add TP classification to detection results
     for sample_token, preds in detection_results['results'].items():
         for result in preds:
             class_name = result['detection_name']
             if class_name in tp_classification[sample_token]:
-                result['TP'] = tp_classification[sample_token][class_name].pop(0)
+                result['dist_TP'] = tp_classification[sample_token][class_name].pop(0)
+                result['TP'] = 1 if 1 in result['dist_TP'] else 0
+
+                # assert if dist_TP is correct
+                if not all([result['dist_TP'][i] <= result['dist_TP'][i+1] for i in range(3)]):
+                    print(f"Incorrect distance thresh for {result['dist_TP']}")
+                # set_trace()
+                # c=1
             else:
+                result['dist_TP'] = [0, 0, 0, 0]
                 result['TP'] = 0
 
     tps = [t for d in detection_results['results'].values() for t in d if t['TP']==1]
@@ -249,7 +271,7 @@ def classify_detections(detection_results, nusc, eval_split, result_path, output
 def main():
     # Load the JSON file
     # input_file = '/workspace/CenterPoint/work_dirs/ad_mlp_05/Resnet_baseline_with_Focal_gt/nusc_validation/immo_results.json'
-    input_file = "/workspace/CenterPoint/work_dirs/immo/cp_5_seed_2hz_balanced/results.json"
+    input_file = "/workspace/CenterPoint/work_dirs/immo/cp_5_seed_2hz_org01/results.json"
     output_file = input_file.replace('.json', '_tp.json')
     output_dir = input_file.replace('results.json', '')
     detection_results = load_json(input_file)
@@ -262,14 +284,6 @@ def main():
         if not detection_results['results'][k]:
             del detection_results['results'][k]
             continue
-        
-    # For non key frames
-    #     for r in detection_results['results'][k]:
-    #         r['TP'] = -500
-    #         if isinstance(r['sample_token'], list):
-    #             if r['sample_token'][0] == r['sample_token'][2:]:
-    #                 set_trace()
-    #             r['sample_token'] = r['sample_token'][0]
 
     # Initialize nuScenes
     from nuscenes import NuScenes

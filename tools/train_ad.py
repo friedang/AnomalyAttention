@@ -2,9 +2,10 @@ from pathlib import Path
 import torch
 import torch.nn as nn
 import torch.optim as optim
-from torch.utils.data import DataLoader, random_split
+from torch.utils.data import DataLoader
 import torch.distributed as dist
 from torch.nn.parallel import DistributedDataParallel as DDP
+
 import numpy as np
 from tqdm import tqdm
 import wandb
@@ -18,8 +19,9 @@ import logging
 from det3d.datasets.nuscenes.nuscenes_track_dataset import SceneDataset
 from det3d.models.classifier.mlp import TrackMLPClassifier
 from det3d.models.classifier.pc_mlp import PCTrackMLPClassifier
-from det3d.models.classifier.voxel_mlp import VoxelTrackMLPClassifier
+from det3d.models.classifier.voxel_at import VoxelTrackMLPClassifier
 from det3d.models.classifier.track2pc_mlp import Track2PCTrackMLPClassifier
+from det3d.models.classifier.transformer import TrackTransformerClassifier
 
 
 class FocalLoss(nn.Module):
@@ -35,9 +37,9 @@ class FocalLoss(nn.Module):
         """
         super(FocalLoss, self).__init__()
         if alpha is None:
-            self.alpha = torch.tensor([0.75, 0.25])  # Default to equal weighting
+            self.alpha = torch.tensor([0.5, 0.5])  # Default to equal weighting
         else:
-            self.alpha = torch.tensor(alpha)  # Pass computed class weights
+            self.alpha = alpha if isinstance(alpha, torch.Tensor) else torch.tensor(alpha)  # Pass computed class weights
         self.gamma = gamma
         self.reduction = reduction
 
@@ -58,7 +60,8 @@ class FocalLoss(nn.Module):
         # Get the probabilities
         pt = torch.exp(-bce_loss)  # Probability of the true class
         self.alpha = self.alpha.to(targets.device)
-        alpha_t = self.alpha[targets.long()]  # Apply class-specific weights
+        # set_trace()
+        alpha_t = self.alpha[targets.long()] if self.alpha.shape < targets.shape else self.alpha  # Apply class-specific weights
         focal_loss = alpha_t * (1 - pt) ** self.gamma * bce_loss
 
         if self.reduction == 'mean':
@@ -112,42 +115,41 @@ def save_gradients(grad):
     return grad
 
 # Define BCEWithLogitsLoss with masking support
-def masked_bce_loss(predictions, labels, class_weights):
+def masked_bce_loss(predictions, labels, class_weights=None):
     # set_trace()
-    loss_fn = FocalLoss(alpha=class_weights, gamma=2.0) #  nn.BCEWithLogitsLoss() # 
+    loss_fn = FocalLoss(alpha=class_weights, gamma=2.0) if class_weights is not None else nn.BCEWithLogitsLoss() # 
     loss = loss_fn(predictions, labels)
     # loss = loss * mask  # Apply mask to ignore padding
-    return loss.mean()
+    loss = loss.mean() if class_weights is not None else loss.sum()
+    return loss
+
+def compute_accuracy(outputs, labels, threshold=0.5):
+    preds = (torch.sigmoid(outputs) > threshold).float()
+    correct = (preds == labels).float()
+    return correct.sum() / len(labels)
 
 # Validation step
-def validate(model, dataloader, device, class_weights):
+def validate(model, dataloader, device, class_weights=None):
     model.eval()
     running_val_loss = 0.0
+    running_val_acc = 0.0
+    total_samples = 0
     with torch.no_grad():
         for batch in tqdm(dataloader, desc="Validation"):
             tp, meta, inputs = batch
             tp, inputs = tp.to(device), inputs.to(device)
 
+            # Skip if all labels are padding
+            if torch.all(tp == -500):
+                continue
+
+            # Process point clouds if necessary
             if args.pc or args.track_pc or args.voxel:
-                tokens, _ = meta
-                token_len = len(tokens[0])
-                pc_batch = []
-                for i in range(token_len):
-                    dummy_status = True
-                    for t in tokens:
-                        if t[i] != "dummy":
-                            pointcloud_path = Path('/workspace/CenterPoint/work_dirs/PCs_npy/train') / f"{t[i]}.npy"
-                            pc_batch.append(np.load(str(pointcloud_path)).reshape(5, 15000))
-                            dummy_status = False
-                            break
-                    if dummy_status:
-                        pc_batch.append(np.zeros((5, 15000)))
-                    
+                pc_batch = process_point_clouds(meta, args)                    
                 pc_batch = torch.tensor(np.stack(pc_batch, axis=0)).float().to(device)
-                          
                 inputs = (inputs, pc_batch)
 
-            # Mask where TP is not padding (-500)
+            # Mask where TP is not padding
             mask = (tp != -500).float()
 
             # Forward pass
@@ -157,13 +159,42 @@ def validate(model, dataloader, device, class_weights):
             masked_outputs = outputs[mask.bool()] 
             masked_labels = tp[mask.bool()] 
 
-            # Compute loss
-            loss = masked_bce_loss(masked_outputs, masked_labels, class_weights) # , mask.unsqueeze(-1))
-            running_val_loss += loss.item()
-    
-    return running_val_loss / len(dataloader)
+            # Compute accuracy
+            accuracy = compute_accuracy(masked_outputs, masked_labels)
+            running_val_acc += accuracy.item() * masked_labels.size(0)
+            total_samples += masked_labels.size(0)
 
-# Training step
+    # Average loss and accuracy
+    avg_acc = running_val_acc / total_samples if total_samples > 0 else 0
+    return avg_acc
+
+
+def process_point_clouds(meta, args, inf=False):
+    tokens = meta[0]
+    token_len = len(tokens[0])
+    pc_batch = []
+
+    for i in range(token_len):
+        dummy_status = True
+        for t in tokens:
+            if t[i] != "dummy":
+                if inf:
+                    pointcloud_path = Path('/workspace/CenterPoint/work_dirs/PCs_npy_vox/val') / f"{t[i]}.npy" if args.voxel else Path('/workspace/CenterPoint/work_dirs/PCs_npy/val') / f"{t[i]}.npy"
+                else:
+                    pointcloud_path = Path('/workspace/CenterPoint/work_dirs/PCs_npy_vox/train') / f"{t[i]}.npy" if args.voxel else Path('/workspace/CenterPoint/work_dirs/PCs_npy/train') / f"{t[i]}.npy"
+                pc_batch.append(np.load(str(pointcloud_path)).T)
+                dummy_status = False
+                break
+        if dummy_status:
+            pc_batch.append([])
+
+    min_points = min([pc.shape[1] for pc in pc_batch if isinstance(pc, np.ndarray)])
+    pc_batch = [pc if isinstance(pc, np.ndarray) else np.zeros((5, min_points)) for pc in pc_batch]
+    pc_batch = [pc[:, np.random.permutation(min_points)] for pc in pc_batch]
+    
+    return pc_batch
+
+
 def train(rank, world_size, args):
     if world_size > 1:
         # Initialize the process group for distributed training
@@ -188,6 +219,7 @@ def train(rank, world_size, args):
 
     # assert train_dataset.chunks != val_dataset.chunks
     logging.info(f"Training on {len(train_dataset)} samples - Validation on {len(val_dataset)} samples.")
+
     label_arrays = [tp[0][tp[0] != -500].cpu().numpy() for tp in train_dataset.chunks]
     
     # creating class weights
@@ -213,6 +245,8 @@ def train(rank, world_size, args):
     not_used_weights = compute_class_weight('balanced', classes=np.array([0, 1]), y=data)
     logging.info(f"# FP samples: {num_0} - # TP samples: {num_1} - Class weights are {not_used_weights}")
 
+    # set_trace()
+
     # Set up samplers for distributed training
     # set_trace()
     train_sampler = torch.utils.data.distributed.DistributedSampler(train_dataset) if world_size > 1 else None
@@ -226,11 +260,11 @@ def train(rank, world_size, args):
     if args.track_pc:
         model = Track2PCTrackMLPClassifier(input_size=12, hidden_size=128, num_layers=3)
     elif args.pc:
-        model = PCTrackMLPClassifier(input_size=12, hidden_size=128, num_layers=3)
+        model = PCTrackMLPClassifier() # input_size=12, hidden_size=128, num_layers=3)
     elif args.voxel:
-        model = VoxelTrackMLPClassifier(input_size=12, hidden_size=128, num_layers=3)
+        model = VoxelTrackMLPClassifier() # (input_size=12, hidden_size=128, num_layers=3)
     else:
-        model = TrackMLPClassifier(input_size=12, hidden_size=128, num_layers=3)
+        model = TrackMLPClassifier() # (input_size=12, hidden_size=128, num_layers=3)
 
     device = torch.device(f'cuda:{rank}' if (not args.cpu) and torch.cuda.is_available() else 'cpu')
     model.to(device)
@@ -262,8 +296,19 @@ def train(rank, world_size, args):
     
     log_model_info(model)
 
+    steps_per_epoch = int(np.ceil(len(train_dataset.chunks) / args.batch_size))
+    total_steps = steps_per_epoch * args.epochs
+    lr_max = 0.1
+    moms = [0.85, 0.95]
+    div_factor = 25
+    pct_start = 0.3
+
+    # scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=20, gamma=0.1) # torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=300, eta_min=1e-6)
+
     # Training loop
     for epoch in range(start_epoch, args.epochs):
+        if args.world_size > 1:
+            dist.barrier()
         if world_size > 1:
             train_sampler.set_epoch(epoch)
         
@@ -276,24 +321,12 @@ def train(rank, world_size, args):
             tp, meta, inputs = batch
             tp, inputs = tp.to(device), inputs.to(device)
 
-            if args.pc or args.track_pc or args.voxel:
-                tokens, _ = meta
-                token_len = len(tokens[0])
-                pc_batch = []
+            if torch.all(tp == -500):
+                continue
 
-                for i in range(token_len):
-                    dummy_status = True
-                    for t in tokens:
-                        if t[i] != "dummy":
-                            pointcloud_path = Path('/workspace/CenterPoint/work_dirs/PCs_npy/train') / f"{t[i]}.npy"
-                            pc_batch.append(np.load(str(pointcloud_path)).T)
-                            dummy_status = False
-                            break
-                    if dummy_status:
-                        pc_batch.append(np.zeros((5, 15000))) # TODO maybe change this hardcoded number; load pc and set shape
-                    
+            if args.pc or args.track_pc or args.voxel:
+                pc_batch = process_point_clouds(meta, args)                    
                 pc_batch = torch.tensor(np.stack(pc_batch, axis=0)).float().to(device)
-                
                 inputs = (inputs, pc_batch)
 
             # Forward pass
@@ -305,27 +338,53 @@ def train(rank, world_size, args):
             masked_labels = tp[mask.bool()] # tp * mask
 
             # Compute loss
-            loss = masked_bce_loss(masked_outputs, masked_labels, class_weights)
+            weights = class_weights
+            if len(meta) == 3:
+                weights = torch.zeros_like(tp)
+                dist_tps = meta[2].to(device)
+                B, N, _ = weights.shape
+                
+                for b in range(B):
+                    for n in range(N):
+                        # set_trace()
+                        num_tp = len([t for t in dist_tps[b][n] if t == 1])
+                        if num_tp == 0:
+                            weights[b][n] = class_weights[0]
+                        elif num_tp == 1:
+                            weights[b][n] = class_weights[1]
+                        elif num_tp == 2:
+                            weights[b][n] = class_weights[1] * 1.1
+                        elif num_tp == 3:
+                            weights[b][n] = class_weights[1] * 1.2
+                        else:
+                            weights[b][n] = class_weights[1] * 1.25  # * num_tp
+
+                weights = weights.to(device)
+                weights = weights[mask.bool()]
+                    
+            loss = masked_bce_loss(masked_outputs, masked_labels, weights)
             loss.backward()
             optimizer.step()
 
             running_loss += loss.item()
 
+        # scheduler.step()
 
         # for name, param in model.named_parameters():
         #     if param.requires_grad:
         #         param.register_hook(save_gradients)
 
-
+        if args.world_size > 1:
+            dist.barrier()
         if rank == 0 or args.world_size == 1:  # Only the master node logs
             if (epoch + 1) % 5 == 0:
                 # Validation step
-                val_loss = validate(model, val_loader, device, class_weights)
+                val_loss = validate(model, val_loader, device) # , class_weights)
 
                 avg_train_loss = running_loss / len(train_loader)
-                logging.info(f"Epoch {epoch + 1}, Train Loss: {avg_train_loss}, Val Loss: {val_loss}")
-                print(f"Epoch {epoch + 1}, Train Loss: {avg_train_loss}, Val Loss: {val_loss}")
-                wandb.log({"Train Loss": avg_train_loss, "Val Loss": val_loss})
+                logging.info(f"Epoch {epoch + 1}, Train Loss: {avg_train_loss}, Val Accuracy: {val_loss}")
+                print(f"Epoch {epoch + 1}, Train Loss: {avg_train_loss}, Val Accuracy: {val_loss}")
+                wandb.log({"Train Loss": avg_train_loss, "Val Accuracy": val_loss})
 
                 # Save checkpoint
                 checkpoint_path = os.path.join(args.workdir, f"epoch_{epoch + 1}.pt")
@@ -347,8 +406,8 @@ if __name__ == "__main__":
     "TRAINING AERGS"
     parser = argparse.ArgumentParser()
     parser.add_argument('--epochs', type=int, default=100, help="Number of training epochs")
-    parser.add_argument('--batch_size', type=int, default=42, help="Batch size per GPU") # 22 for non freezed
-    parser.add_argument('--lr', type=float, default=1e-4, help="Learning rate")
+    parser.add_argument('--batch_size', type=int, default=24, help="Batch size per GPU") # 22 for non freezed
+    parser.add_argument('--lr', type=float, default=1e-5, help="Learning rate")
     parser.add_argument('--world_size', type=int, default=1, help="Number of GPUs for distributed training")
     parser.add_argument('--scenes_info', type=str, help="Path to scenes info")
     parser.add_argument('--run_name', type=str, default='', help="wandb run name")
@@ -360,19 +419,19 @@ if __name__ == "__main__":
     parser.add_argument('--cpu', action="store_true", help="Use CPU")
     parser.add_argument('--load_chunks_from', type=str, help="Use GT track info")
     parser.add_argument('--workdir', type=str, required=True, help="Directory to workdir")
-    parser.add_argument('--resume-from', type=str, help="Checkpoint resume from file")
+    parser.add_argument('--resume_from', type=str, help="Checkpoint resume from file")
     parser.add_argument('--sample_ratio', type=float, default=0.85, help="Ratio for training/validation")
-    parser.add_argument("--local-rank", type=int, default=0)
+    parser.add_argument("--local_rank", type=int, default=0)
 
     args = parser.parse_args()
     if "LOCAL_RANK" not in os.environ:
         os.environ["LOCAL_RANK"] = str(args.local_rank)
 
+    if not os.path.isdir(args.workdir):
+            os.mkdir(args.workdir)
+
     if args.local_rank == 0 or args.world_size == 1:
             setup_logging(os.path.join(args.workdir, 'training.log'))
-
-    if not os.path.isdir(args.workdir):
-        os.mkdir(args.workdir)
 
     world_size = args.world_size
     from ipdb import launch_ipdb_on_exception, set_trace
