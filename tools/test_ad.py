@@ -7,17 +7,18 @@ from torch.nn.parallel import DistributedDataParallel as DDP
 import argparse
 from tqdm import tqdm
 import os
-import json
 import numpy as np
 import matplotlib.pyplot as plt
-from sklearn.metrics import precision_recall_curve, confusion_matrix, PrecisionRecallDisplay
+import shutil
+from sklearn.metrics import precision_recall_curve
 import logging
 import wandb
 
 from tools.train_ad import setup_logging, process_point_clouds
+from tools.plot_utils import track_length_bar, plot_confusion_matrix, plot_pr_confidence, plot_ad_by_track_score
 
 from det3d.datasets.nuscenes.nuscenes_track_dataset import SceneDataset
-from det3d.datasets.nuscenes.utils import NpEncoder, save_json
+from det3d.datasets.nuscenes.utils import NpEncoder, save_json, load_json
 from det3d.models.classifier.mlp import TrackMLPClassifier
 from det3d.models.classifier.lstm import LSTMClassifier
 from det3d.models.classifier.transformer import TrackTransformerClassifier
@@ -28,7 +29,8 @@ from det3d.models.classifier.voxel_at import VoxelTrackMLPClassifier
 
 # Define sigmoid function for converting logits to probabilities
 sigmoid = nn.Sigmoid()
-
+CLASS_CONF_THRESH = {'car': 0,'bus': 0,'trailer': 0.0,'truck': 0,'pedestrian': 0,'bicycle': 0.2,
+                         'motorcycle': 0.0,'construction_vehicle': 0, 'barrier': 0.2, 'traffic_cone': 0}
 
 def log_model_info(model):
     # Log the model architecture
@@ -42,67 +44,17 @@ def log_model_info(model):
     model_size_mb = sum(p.element_size() * p.numel() for p in model.parameters()) / (1024 ** 2)
     logging.info("Model size: %.2f MB", model_size_mb)
 
-# Function to plot precision-recall curve and confidence plots
-def plot_pr_confidence(precision, recall, thresholds, workdir):
-    # Precision-Recall curve
-    plt.figure()
-    PrecisionRecallDisplay(precision=precision, recall=recall).plot()
-    plt.title('Precision-Recall Curve')
-    plt.savefig(os.path.join(workdir, 'precision_recall_curve.png'))
 
-    # Precision-Confidence plot
-    plt.figure()
-    plt.plot(thresholds, precision[:-1], label="Precision")
-    plt.xlabel("Confidence Threshold")
-    plt.ylabel("Precision")
-    plt.title("Precision vs. Confidence")
-    plt.savefig(os.path.join(workdir, 'precision_confidence_curve.png'))
-
-    # Recall-Confidence plot
-    plt.figure()
-    plt.plot(thresholds, recall[:-1], label="Recall")
-    plt.xlabel("Confidence Threshold")
-    plt.ylabel("Recall")
-    plt.title("Recall vs. Confidence")
-    plt.savefig(os.path.join(workdir, 'recall_confidence_curve.png'))
-
-# Function to plot confusion matrix
-def plot_confusion_matrix(y_true, y_pred, workdir):
-    # Compute confusion matrix
-    cm = confusion_matrix(y_true, y_pred)
-
-    # Create the plot
-    plt.figure()
-    plt.imshow(cm, interpolation='nearest', cmap=plt.cm.Blues)
-    plt.title('Confusion Matrix')
-    plt.colorbar()
-
-    # Add labels for the axes
-    tick_marks = np.arange(2)
-    plt.xticks(tick_marks, ['0', '1'])
-    plt.yticks(tick_marks, ['0', '1'])
-    plt.xlabel('Predicted label')
-    plt.ylabel('True label')
-
-    # Add the counts in the matrix cells
-    thresh = cm.max() / 2.  # Define a threshold for text color contrast
-    for i in range(cm.shape[0]):
-        for j in range(cm.shape[1]):
-            plt.text(j, i, format(cm[i, j], 'd'),
-                     ha="center", va="center",
-                     color="white" if cm[i, j] > thresh else "black")
-
-    # Save the confusion matrix plot
-    plt.savefig(os.path.join(workdir, 'confusion_matrix.png'))
-    plt.close()  # Close the figure after saving to avoid display in notebooks
-
-def inference(model, dataloader, device, threshold, workdir, validate=False, args=None):
+def inference(model, dataloader, device, threshold, workdir, val=False, args=None):
     model.eval()
     output_dict = {}
+    all_track_scores = []
+    all_lengths = []
     all_labels = []
     all_predictions = []
     all_confidences = []
-    inf = True if not validate else False
+    all_class_names = []
+    # inf = True if not val else False
 
     # Iterate over batches
     with torch.no_grad():
@@ -112,30 +64,31 @@ def inference(model, dataloader, device, threshold, workdir, validate=False, arg
             if torch.all(tp == -500):
                 continue
 
-            if inf:
-                tokens, detection_ids, scene_data = meta
-            else:
-                if len(meta) == 2:
-                    tokens, detection_ids = meta
-                else:
-                    tokens, detection_ids, _ = meta
-                scene_data = [{}] * len(tokens)
+            tokens, detection_ids, scene_data = meta
             tokens = [t[0] for t in tokens]
             detection_ids = [t[0] for t in detection_ids]
             inputs = inputs.to(device)
 
             if args.pc or args.track_pc or args.voxel:
-                pc_batch = process_point_clouds(meta, args) if args.eval else process_point_clouds(meta, args, inf=True)
+                pc_batch = process_point_clouds(meta, args, val=True) if args.val else process_point_clouds(meta, args)
                 pc_batch = torch.tensor(np.stack(pc_batch, axis=0)).float().to(device)
                 inputs = (inputs, pc_batch)
 
+            # if not any([[t for t in detection_ids if 'car' in t or 'ped' in t]]):
             outputs = model(inputs)
             confidences = sigmoid(outputs).squeeze(2).permute(1, 0).cpu().numpy()
-
             # Apply threshold to get TP labels (0 or 1)
-            predicted_labels = (confidences >= threshold).astype(int)
+            if not threshold:
+                detection_names = [meta['detection_name'][0] for meta in scene_data if meta['detection_name'][0] != 'dummy']
+                predicted_labels = (confidences >= CLASS_CONF_THRESH[detection_names[0]]).astype(int) 
+            else:
+                predicted_labels = (confidences >= float(threshold)).astype(int)
+            # else:
+            #     confidences = torch.ones_like(tp.shape)
+            #     predicted_labels = torch.ones_like(tp.shape)
 
             valid_idx = torch.zeros(tp.shape)
+            length = len([t for t in detection_ids if 'dummy' not in t])
 
             # Filter out 'dummy' tokens or 'dummy' ids
             for i, (t, det_id, conf, pred, meta_data) in enumerate(zip(tokens, detection_ids, confidences, predicted_labels, scene_data)):
@@ -147,46 +100,111 @@ def inference(model, dataloader, device, threshold, workdir, validate=False, arg
 
                     output = {"confidence": float(conf), "TP": int(pred),
                                 "id": det_id, "tracking_id": det_id.replace(key, '').replace('_', ''),
-                                "sample_token": key,}
+                                "sample_token": key, "track_length": length}
                     if isinstance(meta_data, dict):
                         output.update({k: v for k, v in meta_data.items() if k not in output.keys()})
 
                     output_dict[key].append(output)
-                    all_confidences.extend(conf)    # python3 ./tools/merge_seed_pseudo_gt.py
+
+                    all_confidences.extend(conf)
                     all_predictions.extend(pred)
+                    all_lengths.append(length)
+                    if 'tracking_score' in output.keys():
+                        all_track_scores.append(output['tracking_score'])
+                        all_class_names.append(output['detection_name'])
                     valid_idx[0, i, 0] = 1
 
             # Collect true labels if in validation mode
-            if validate:
-                # Filter out -500 (padding) labels
-                valid_tp = tp[valid_idx == 1].cpu().numpy()
-                all_labels.extend(valid_tp)
+            # if validate:
+            # Filter out -500 (padding) labels
+            valid_tp = tp[valid_idx == 1].cpu().numpy()
+            all_labels.extend(valid_tp)
 
     # Save the results to a json file
     if args.local_rank == 0 or args.world_size == 1:
         fp = len([v for values in output_dict.values() for v in values if v['TP'] == 0])
         logging.info(f"Number of TP is {len([v for values in output_dict.values() for v in values if v['TP'] == 1])}")
         logging.info(f"Number of Dets detected as AD/FP is {fp}")
-        assert fp != 0, f"No anomalies were detected for the threshold {threshold}"
+        if fp == 0:
+            print(f"No anomalies were detected for the threshold {threshold}")
+            return
     
 
     save_json(output_dict, os.path.join(workdir, 'inference_results.json'), cls=NpEncoder)
 
-    if (args.local_rank == 0 or args.world_size == 1) and validate:
+    if (args.local_rank == 0 or args.world_size == 1):
+        plot_data = {'gt_labels': all_labels,
+                     'predictions': all_predictions,
+                     'scores': all_track_scores,
+                     'confidences': all_confidences,
+                     'track_lengths': all_lengths,
+                     'class_names': all_class_names
+                     }
+        
+        plot_dir = os.path.join(workdir, 'plot_dir')
+        if not os.path.isdir(plot_dir):
+            os.mkdir(plot_dir)
+        
+        save_json(plot_data, os.path.join(plot_dir, 'data_for_plots.json'), cls=NpEncoder)
+
+        # plot_data = load_json(os.path.join(plot_dir, 'data_for_plots.json'))
+        # all_labels = plot_data['gt_labels']
+        # all_predictions = plot_data['predictions']
+        # all_track_scores = plot_data['scores']
+        # all_confidences = plot_data['confidences']
+        # all_lengths = plot_data['track_lengths']
+        # all_class_names = plot_data['class_names']
+
         # Precision-Recall curve
-        precision, recall, thresholds = precision_recall_curve(all_labels, all_confidences)
+        pr_stuff_to_plot = [(all_labels, all_confidences, all_predictions, 'all_classes')]
+        all_class_names = [c[0] for c in all_class_names]
 
-        # Plot precision-recall and confidence plots
-        plot_pr_confidence(precision, recall, thresholds, workdir)
+        for c in list(set(all_class_names)):
+            labels = [l for i, l in enumerate(all_labels) if all_class_names[i] == c]
+            confs = [l for i, l in enumerate(all_confidences) if all_class_names[i] == c]
+            preds = [l for i, l in enumerate(all_predictions) if all_class_names[i] == c]
+            pr_stuff_to_plot.append((labels, confs, preds, c))
 
-        # Plot confusion matrix
-        plot_confusion_matrix(all_labels, all_predictions, workdir)
+        for stuff in pr_stuff_to_plot:
+            labels, confs, preds, name = stuff
+            
+            precision, recall, thresholds = precision_recall_curve(labels, confs)
+            # Plot precision-recall and confidence plots
+            plot_pr_confidence(precision, recall, thresholds, plot_dir, name)
+            # Plot confusion matrix
+            plot_confusion_matrix(labels, preds, plot_dir, name)
 
         # Final TP/FP evaluation
         all_labels = np.array(all_labels)
         all_predictions = np.array(all_predictions)
-        matches = np.sum(all_labels == all_predictions)
+        matches_array = (all_labels == all_predictions).astype(int)
+        matches = np.sum(matches_array)
         mismatches = np.sum(all_labels != all_predictions)
+
+        anomaly_match_length = ([], [])
+        nomaly_match_length = ([], [])
+        anomaly_track_scores = []
+        nomaly_track_scores = []
+        for i, m in enumerate(matches_array):
+            if all_labels[i] == 0:
+                anomaly_match_length[0].append(m)
+                anomaly_match_length[1].append(all_lengths[i])
+                if all_track_scores:
+                    anomaly_track_scores.append(all_track_scores[i])
+            elif all_labels[i] == 1:
+                nomaly_match_length[0].append(m)
+                nomaly_match_length[1].append(all_lengths[i])
+                if all_track_scores:
+                    nomaly_track_scores.append(all_track_scores[i])
+
+        track_length_bar(anomaly_match_length, plot_dir, filter='anomaly')
+        track_length_bar(nomaly_match_length, plot_dir, filter='nomaly')
+        track_length_bar((matches_array, all_lengths), plot_dir)
+
+        if all_track_scores:
+            plot_ad_by_track_score((anomaly_match_length[0], anomaly_track_scores), plot_dir)
+            plot_ad_by_track_score((nomaly_match_length[0], nomaly_track_scores), plot_dir)
+            plot_ad_by_track_score((matches_array, all_track_scores), plot_dir)
 
         # Calculate percentages
         total_predictions = len(all_predictions)
@@ -198,24 +216,29 @@ def inference(model, dataloader, device, threshold, workdir, validate=False, arg
         wandb.log({
             "Correct preds": matches,
             "Wrong preds": mismatches,
-            "Correct preds %": correct_preds_percentage,
-            "Correct TP % (label 1)": correct_tp_percentage,
-            "Correct TN % (label 0)": correct_tn_percentage
+            "Accuracy": correct_preds_percentage,
+            "TPR (nomalies / label 1)": correct_tp_percentage,
+            "TNR (anomalies / label 0)": correct_tn_percentage
         })
 
         # Print and log information
+        logging.info(f"WandB Run Name: {wandb.run.name}")
         logging.info(f"Total matches (correct predictions): {matches}")
         logging.info(f"Total mismatches (incorrect predictions): {mismatches}")
-        logging.info(f"Correct predictions percentage: {correct_preds_percentage:.2f}%")
-        logging.info(f"Correct TP (label 1) percentage: {correct_tp_percentage:.2f}%")
-        logging.info(f"Correct TN (label 0) percentage: {correct_tn_percentage:.2f}%")
+        logging.info(f"Correct predictions (Accuracy): {correct_preds_percentage:.2f}%")
+        logging.info(f"Nomalies found (TPR / nomalies / label 1): {correct_tp_percentage:.2f}%")
+        logging.info(f"Anomalies found (TNR / anomalies / label 0): {correct_tn_percentage:.2f}%")
+        logging.info(f"FPR: {100 - correct_tp_percentage:.2f}%")
+        logging.info(f"FNR: {100 - correct_tn_percentage:.2f}%")
 
         print(f"Total number of predictions: {total_predictions}")
         print(f"Total matches (correct predictions): {matches}")
         print(f"Total mismatches (incorrect predictions): {mismatches}")
-        print(f"Correct predictions percentage: {correct_preds_percentage:.2f}%")
-        print(f"Correct TP (label 1) percentage: {correct_tp_percentage:.2f}%")
-        print(f"Correct TN (label 0) percentage: {correct_tn_percentage:.2f}%")
+        print(f"Correct predictions (Accuracy): {correct_preds_percentage:.2f}%")
+        print(f"Nomalies found (TPR / nomalies / label 1): {correct_tp_percentage:.2f}%")
+        print(f"Anomalies found (TNR / anomalies / label 0): {correct_tn_percentage:.2f}%")
+        print(f"FPR: {100 - correct_tp_percentage:.2f}%")
+        print(f"FNR: {100 - correct_tn_percentage:.2f}%")
 
 def test(rank, world_size, args):
     # Initialize distributed processing group for multi-GPU inference
@@ -223,12 +246,14 @@ def test(rank, world_size, args):
         torch.distributed.init_process_group(backend="nccl", init_method='env://', rank=rank, world_size=world_size)
 
     # Load dataset
-    inf = True if not args.eval else False
     if args.load_chunks_from:
-        dataset = SceneDataset(load_chunks_from=args.load_chunks_from, inference=inf)
+        dataset = SceneDataset(load_chunks_from=args.load_chunks_from, inference=True)
     else:
-        dataset = SceneDataset(scenes_info_path=args.scenes_info, track_info=args.track_info, inference=inf)
+        dataset = SceneDataset(scenes_info_path=args.scenes_info, track_info=args.track_info, inference=True)
+        shutil.copy(args.scenes_info.replace('scene2trackname.json', 'inference_chunks.pt'), args.workdir)
     
+    print(f"Chunk size is {len(dataset.chunks[0][2])}")
+
     if world_size > 1:
         sampler = DistributedSampler(dataset, num_replicas=world_size, rank=rank)
     else:
@@ -272,7 +297,7 @@ def test(rank, world_size, args):
         device=device,
         threshold=args.confidence_threshold,
         workdir=args.workdir,
-        validate=args.eval,
+        val=args.val,
         args=args
     )
 
@@ -284,11 +309,11 @@ if __name__ == "__main__":
     parser.add_argument('--scenes_info', type=str, help="Path to scenes info")
     parser.add_argument('--track_info', type=str, help="Path to track info")
     parser.add_argument('--batch_size', type=int, default=1, help="Batch size for inference")
-    parser.add_argument('--confidence_threshold', type=float, default=0.5, help="Threshold for TP (default: 0.5)")
+    parser.add_argument('--confidence_threshold', default=None, help="Threshold for Nomaly")
     parser.add_argument('--model_checkpoint', type=str, required=True, help="Path to the trained model checkpoint")
     parser.add_argument('--load_chunks_from', type=str, help="Path to the chunk data")
     parser.add_argument('--workdir', type=str, required=True, help="Directory to save output json and plots")
-    parser.add_argument('--eval', action="store_true", help="Run evaluation with validation labels")
+    parser.add_argument('--val', action="store_true", help="Run evaluation with validation labels")
     parser.add_argument('--cpu', action="store_true", help="Use CPU for inference")
     parser.add_argument('--world_size', type=int, default=1, help="Number of GPUs for distributed inference")
     parser.add_argument('--pc', action="store_true", help="Use point clouds")

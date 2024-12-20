@@ -149,7 +149,7 @@ def save_point_cloud(token, output_path, nusc, max_points=15000):
     # print(f"Saved point cloud to {output_file}")
 
 
-def create_tracks(detection_results, nusc, num_lidar_pts=False):
+def create_tracks(detection_results, nusc, num_lidar_pts=False, sub_path='train'):
 
     tracks = {} # box, tp_label, sample_token
 
@@ -170,7 +170,7 @@ def create_tracks(detection_results, nusc, num_lidar_pts=False):
             if num_lidar_pts:
                 if sample_token not in pointcloud_cache:
                     if sample:
-                        pointcloud_path = Path('/workspace/CenterPoint/work_dirs/PCs_npy/train') / f"{sample_token}.npy"
+                        pointcloud_path = Path(f"/workspace/CenterPoint/work_dirs/PCs_npy_vox/{sub_path}") / f"{sample_token}.npy"
                         pointcloud = np.load(str(pointcloud_path))
                         sd_record = nusc.get('sample_data', sample['data']['LIDAR_TOP'])
                     else:
@@ -287,7 +287,7 @@ def extract_gt_tracks(nusc: NuScenes, sample_tokens: List[str]) -> Dict[str, Lis
             #     'size': annotation['size'],
             #     'rotation': annotation['rotation']
             #     }
-            pointcloud_path = Path('/workspace/CenterPoint/work_dirs/PCs_npy/train') / f"{sample_token}.npy"
+            pointcloud_path = Path('/workspace/CenterPoint/work_dirs/PCs_npy_vox/train') / f"{sample_token}.npy"
             pointcloud = np.load(str(pointcloud_path))
             
             sd_record = nusc.get('sample_data', sample['data']['LIDAR_TOP'])
@@ -444,13 +444,15 @@ def remove_det_by_track_id(detection_results, tracks, len_thresh=2, score_thresh
 def main():
     # Load the JSON file
     hz20 = False
+
+    sample = None # 5, 10
     gt = False
     extract_pcs = False
-    val = False
-    remove_non_cp = True
+    val = True
+    remove_non_cp = False
     remove_det_by_track_len = False
     # TODO ALWAYS USE results_tp
-    immo_results = '/workspace/CenterPoint/work_dirs/immo/cp_5_seed_2hz_org01/results_tp.json' #'/workspace/CenterPoint/work_dirs/Center_point_original_nusc_0075_flip/immo_results/results_tp.json' # './work_dirs/ad_mlp_05/aug_t5/nusc_validation_t01/inference_results.json' # '/workspace/CenterPoint/work_dirs/immo/cp_valset/cp_results.json'
+    immo_results = '/workspace/CenterPoint/work_dirs/immo/results/results_tp.json' #'/workspace/CenterPoint/work_dirs/Center_point_original_nusc_0075_flip/immo_results/results_tp.json' # './work_dirs/ad_mlp_05/aug_t5/nusc_validation_t01/inference_results.json' # '/workspace/CenterPoint/work_dirs/immo/cp_valset/cp_results.json'
     cp_det_file = "/workspace/CenterPoint/work_dirs/5_nusc_centerpoint_voxelnet_0075voxel_fix_bn_z/eval_on_seed/2Hz/baseline_SCs_03Mean/infos_train_10sweeps_withvelo_filter_True.json"
 
     # for 20 Hz
@@ -474,7 +476,7 @@ def main():
     if remove_non_cp:
         ks = list(detection_results['results'].keys())
         org_keys = load_json(cp_det_file)['results'].keys()
-        print(f"Length of frames BEFORE removal: {len(ks)}")
+        print(f"Number of frames BEFORE removal: {len(ks)}")
         for k in ks:
             if k not in org_keys:
                 del detection_results['results'][k]    
@@ -482,7 +484,7 @@ def main():
                 del detection_results['results'][k]
         
         ks = list(detection_results['results'].keys())
-        print(f"Length of frames AFTER removal: {len(ks)}")
+        print(f"Number of frames AFTER removal: {len(ks)}")
 
         num_det_no_dummy = len([v for values in detection_results['results'].values() for v in values if v['TP'] != -500])
         print(f"Number of non dummy items in dets is {num_det_no_dummy}")
@@ -493,7 +495,7 @@ def main():
         gt_tracks = extract_gt_tracks(nusc, tokens)
         save_json(gt_tracks, immo_results.replace('results_tp', 'gt_track_info'), cls=NpEncoder)
     else:
-        p_tracks = create_tracks(detection_results, nusc, num_lidar_pts = True if not remove_det_by_track_len else False)
+        p_tracks = create_tracks(detection_results, nusc, num_lidar_pts = True if not remove_det_by_track_len else False, sub_path='val') if val else create_tracks(detection_results, nusc, num_lidar_pts = True if not remove_det_by_track_len else False)
         save_json(p_tracks, immo_results.replace('results_tp', 'track_info'), cls=NpEncoder)
 
     # Remove Detections by track id / track lengths
@@ -508,7 +510,11 @@ def main():
         immo_results = immo_results.replace('results_tp', 'gt_track_info')
     else:
         immo_results = immo_results.replace('results_tp', 'track_info')
-    scene_names = create_splits_scenes()['val'] if val else torch.load('/workspace/CenterPoint/work_dirs/5_nusc_centerpoint_voxelnet_0075voxel_fix_bn_z/train_indices.pth')
+    
+    if sample:
+        scene_names = torch.load(f"/workspace/CenterPoint/work_dirs/{sample}_nusc_centerpoint_voxelnet_0075voxel_fix_bn_z/train_indices.pth")
+    else:
+        scene_names = create_splits_scenes()['val'] if val else create_splits_scenes()['train']
     tracks = load_json(immo_results)
 
     # set_trace()

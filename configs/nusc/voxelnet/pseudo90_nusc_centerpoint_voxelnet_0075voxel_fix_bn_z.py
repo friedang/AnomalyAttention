@@ -165,11 +165,12 @@ test_pipeline = [
 
 train_anno = "work_dirs/10_nusc_centerpoint_voxelnet_0075voxel_fix_bn_z/train_gt_and_pseudo_gt.pkl" # "data/nuScenes/infos_train_10sweeps_withvelo_filter_True.pkl"
 val_anno = "data/nuScenes/infos_val_10sweeps_withvelo_filter_True.pkl"
+project_name="cp_10seed_90pseudo_sc03"
 test_anno = None
 
 data = dict(
-    samples_per_gpu=14,
-    workers_per_gpu=6,
+    samples_per_gpu=20,
+    workers_per_gpu=2,
     train=dict(
         type=dataset_type,
         root_path=data_root,
@@ -231,7 +232,7 @@ device_ids = range(2)
 dist_params = dict(backend="nccl", init_method="env://")
 log_level = "INFO"
 work_dir = './work_dirs/{}/'.format(__file__[__file__.rfind('/') + 1:-3])
-load_from = None # './work_dirs/10_nusc_centerpoint_voxelnet_0075voxel_fix_bn_z/latest.pth'
+load_from = './work_dirs/10_nusc_centerpoint_voxelnet_0075voxel_fix_bn_z/latest.pth'
 resume_from = None 
 workflow = [('train', 1)]
 
@@ -240,5 +241,7 @@ import shutil
 
 config_file = __file__
 destination_file = os.path.join(work_dir, os.path.basename(config_file))
+if not os.path.isdir(work_dir):
+    os.mkdir(work_dir)
 if not os.path.exists(destination_file):
     shutil.copy(config_file, destination_file)

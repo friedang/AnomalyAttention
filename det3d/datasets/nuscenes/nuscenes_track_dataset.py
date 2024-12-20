@@ -8,6 +8,7 @@ import numpy as np
 import os
 import torch
 import wandb
+import tqdm
 
 from ipdb import set_trace
 from functools import reduce
@@ -59,27 +60,28 @@ class FalsePositiveAugmentation(torch.nn.Module):
     def generate_translation_noise(self, translation: torch.Tensor, threshold: float) -> torch.Tensor:
         """Generate noise vector that exceeds the center distance threshold."""
         # Randomly decide how many dimensions to perturb (1, 2, or all 3)
-        num_dims_to_modify = torch.randint(1, 4, (1,)).item()  # Randomly choose 1, 2, or 3 dimensions
+        num_dims_to_modify = torch.randint(1, 3, (1,)).item()  # Randomly choose 1, 2
+        # num_dims_to_modif = 2
 
         # Create a mask for selected dimensions
-        dim_indices = torch.randperm(3)[:num_dims_to_modify]  # Randomly select dimensions
+        dim_indices = torch.randperm(2)[:num_dims_to_modify]  # Randomly select dimensions
+        assert all([i in [0, 1] for i in dim_indices])
         mask = torch.zeros_like(translation, dtype=torch.bool)
         mask[dim_indices] = True
 
         # Generate noise for the selected dimensions
         noise = torch.randn_like(translation)
         noise = noise / torch.norm(noise)
-        # noise[mask] = 1
 
         # threshold = threshold / torch.sqrt(torch.tensor(num_dims_to_modify, dtype=torch.float))
 
         # Scale the noise to ensure the total displacement exceeds the threshold
+        assert num_dims_to_modify in [1, 2]
         if num_dims_to_modify == 1:
-            scale = random.uniform(5.6, 8) # scale = threshold * (1.15 + torch.rand(1) * 0.6) # min is 4.6, max 7 [4.6, 7]
+            scale = random.uniform(5.5, 8) 
         elif num_dims_to_modify == 2:
-            scale = random.uniform(4.3, 5.75) # scale = threshold * (1 + torch.rand(1) * 0.5) # min is 4.6, max 7 [3.3, 4.75]
-        else:
-            scale = random.uniform(3.75, 5) # scale = threshold * (1.0 + torch.rand(1) * 0.25)  # [2.75, 4]
+            scale = random.uniform(4.8, 6)
+
         
         noise[mask] += scale
 
@@ -91,11 +93,12 @@ class FalsePositiveAugmentation(torch.nn.Module):
         """
         Apply FP augmentation to a single bounding box.
         """
-        if torch.rand(1) > self.fp_probability:
-            return bbox
+        # if torch.rand(1) > self.fp_probability:
+        #     return bbox
 
         translation_noise = self.generate_translation_noise(torch.tensor(bbox['translation']), self.center_distance_threshold)
         augmented_translation = torch.tensor(bbox['translation']) + translation_noise
+        assert np.linalg.norm(np.array(augmented_translation[:2]) - np.array(bbox['translation'][:2])) > 4.5
         bbox['translation'] = augmented_translation.tolist()
         bbox['TP'] = 0
         bbox['dist_TP'] = [0, 0, 0, 0]
@@ -109,7 +112,7 @@ class FalsePositiveAugmentation(torch.nn.Module):
 
 class SceneDataset(Dataset):
     def __init__(self, scenes_info_path=None, track_info=None, gt_scenes_info_path=None, gt_track_info=None,
-                 load_chunks_from=None, sample_ratio=1, chunk_size=42, inference=False):
+                 load_chunks_from=None, sample_ratio=1, max_track_len=42, chunk_size=42, lengths_minimum=4, inference=False, single_class=None):
         # scenes is a dict where keys are scene names, and values are lists of tensors
         self.inference = inference
         self.chunks = []
@@ -118,18 +121,14 @@ class SceneDataset(Dataset):
                       'sample_token': 'dummy', 'TP': -500, 'num_lidar_pts': -500, 'tracking_id': 'dummy', 'detection_name': 'dummy', 'dist_TP': [0, 0, 0, 0]}
         
         detection_names = ['car','bus','trailer','truck','pedestrian','bicycle',
-                                'motorcycle','construction_vehicle', 'barrier', 'traffic_cone']
+                           'motorcycle','construction_vehicle', 'barrier', 'traffic_cone']
         self.name_dict = {n: i+1 for n, i in zip(detection_names, range(len(detection_names)))}
 
-        self.max_track_len = 42
-        # TODO Delete dummy adding below for 42 and do this in utils
-        lengths_thresh = 2
+        self.max_track_len = max_track_len
+        lengths_thresh = lengths_minimum
         sample_ratio = None if sample_ratio == 1 else sample_ratio
 
-        self.fp_aug = FalsePositiveAugmentation(
-            center_distance_threshold=4.0,
-            fp_probability=0.7
-        )
+        self.fp_aug = FalsePositiveAugmentation(fp_probability=0.8)
 
         if load_chunks_from:
             self.chunks = torch.load(load_chunks_from)
@@ -140,7 +139,13 @@ class SceneDataset(Dataset):
             # Remove tracks if their lengths is smaller threshold
             assert len([v for val in scenes_info.values() for v in val]) == len(track_info)
             print(f"Number of tracks before threshold filtering: {len(track_info)}")
-            track_info = {k: v + [self.dummy] for k, v in track_info.items() if len([det for det in v if det['TP'] in [0, 1]]) > lengths_thresh}
+            num_dummy_pads = max_track_len - len(list(track_info.values())[0])
+            if single_class:
+                track_info = {k: v + [self.dummy] * num_dummy_pads 
+                              for k, v in track_info.items() if single_class in k and len([det for det in v if det['TP'] in [0, 1]]) > lengths_thresh}
+            else:
+                track_info = {k: v + [self.dummy] * num_dummy_pads 
+                            for k, v in track_info.items() if 'car' not in k and 'ped' not in k and len([det for det in v if det['TP'] in [0, 1]]) > lengths_thresh}
             scenes_info = {k: [name for name in v if name in track_info.keys()] for k, v in scenes_info.items()}
             assert len([v for val in scenes_info.values() for v in val]) == len(track_info)
             print(f"Number of tracks after threshold filtering: {len(track_info)}")
@@ -163,19 +168,26 @@ class SceneDataset(Dataset):
             if gt_scenes_info_path:
                     gt_scenes_info = json.load(open(gt_scenes_info_path, 'r'))
                     gt_track_info = json.load(open(gt_track_info, 'r'))
-                    gt_track_info = {k: v + [self.dummy] for k, v in gt_track_info.items()}
+                    if single_class:
+                        gt_track_info = {k: v + [self.dummy] * num_dummy_pads 
+                                         for k, v in gt_track_info.items() if single_class in k and len([det for det in v if det['TP'] in [0, 1]]) > lengths_thresh}
+                    else:
+                        gt_track_info = {k: v + [self.dummy] * num_dummy_pads 
+                                         for k, v in gt_track_info.items() if 'car' not in k and 'ped' not in k and len([det for det in v if det['TP'] in [0, 1]]) > lengths_thresh}
+                    gt_scenes_info = {k: [name for name in v if name in gt_track_info.keys()] for k, v in gt_scenes_info.items()}
                     max_gt_scene_size = max([len(v) for v in gt_track_info.values()])
                     print(f"Maximum GT Scene size is: {max_gt_scene_size}")
             for i, split in enumerate(scene_split):
                 self.scene_names = split
                 if i == 0:
-                    for _ in range(2):
+                    for _ in range(1):
                         self.fill_chunks(track_info, scenes_info, max_scene_size, gt=False)
                 else:
                     self.fill_chunks(track_info, scenes_info, max_scene_size, gt=False)
 
                 if gt_scenes_info_path and i == 0:
-                    self.fill_chunks(gt_track_info, gt_scenes_info, max_gt_scene_size, gt=True)
+                    # set_trace()
+                    # self.fill_chunks(gt_track_info, gt_scenes_info, max_gt_scene_size, gt=True)
                     for _ in range(2):
                         self.fill_chunks(gt_track_info, gt_scenes_info, max_gt_scene_size, gt=True, augment=True)
 
@@ -208,7 +220,8 @@ class SceneDataset(Dataset):
                    self.scenes[name].append(dummy_track)
         
         print(f"Number of non dummy items in self.scenes is {len([v for values in self.scenes.values() for k in values for v in k if v['TP'] != -500])}")
-        for name in self.scenes.keys():
+        print('Filling Chunks')
+        for name in tqdm.tqdm(self.scenes.keys()):
 
             scene_data = []
             for i in range(0, self.max_track_len, self.chunk_size):
@@ -224,10 +237,17 @@ class SceneDataset(Dataset):
                 chunk = scene_data[i:i + self.chunk_size]
                 if gt and augment and not all(d['TP'] == -500 for d in chunk):
                     # Augment the chunk
-                    for j, detection in enumerate(chunk):
-                        if detection['TP'] == 1:
-                            aug_bbox = self.fp_aug(detection)
-                            chunk[j].update(aug_bbox)
+                    for idx, detection in enumerate(chunk):
+                        if detection['TP'] == 1 and torch.rand(1) < self.fp_aug.fp_probability:
+                            det_box = detection.copy()
+                            aug_bbox = self.fp_aug(det_box)
+                            # dist_condition = [np.linalg.norm(np.array(det['translation'][:2]) - np.array(aug_bbox['translation'][:2])) > 4.5 for det in chunk]
+                            # while not all(dist_condition):
+                            #     aug_bbox = self.fp_aug(det_box)
+                            #     dist_condition = [np.linalg.norm(np.array(det['translation'][:2]) - np.array(aug_bbox['translation'][:2])) > 4.5 for det in chunk]
+                            
+                            chunk[idx].update(aug_bbox)
+                        
                 # Add dummy
                 if len(chunk) != self.chunk_size:
                     len_diff  = abs(self.chunk_size - len(chunk))

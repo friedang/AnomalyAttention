@@ -109,7 +109,8 @@ class Voxelization(object):
 
 
 class VoxelTrackMLPClassifier(nn.Module):
-    def __init__(self, input_size=12, hidden_size=128, num_layers=3, dropout=0.1, track_len=5):
+    def __init__(self, input_size=12, hidden_size=128, num_layers=3, dropout=0.1,
+                 track_len=5, mlp_feature_dim=128, num_heads=16):
         """
         A simple MLP for binary classification of TP/FP based on tracking data.
         Args:
@@ -129,10 +130,9 @@ class VoxelTrackMLPClassifier(nn.Module):
         # Output layer (binary classification)
         self.output_layer = nn.Linear(hidden_size * 2, 1)
 
-        mlp_feature_dim=128
         track_input_dim=input_size
         voxel_feature_dim=512
-        fused_dim=256
+        fused_dim=hidden_size * 2
         self.track_mlp = TrackMLP(track_input_dim, mlp_feature_dim, mlp_feature_dim)
         self.fusion_layer = CrossAttentionFusion(voxel_feature_dim, mlp_feature_dim, fused_dim)
         
@@ -147,7 +147,7 @@ class VoxelTrackMLPClassifier(nn.Module):
 
         self.multihead_attention = nn.MultiheadAttention(
             embed_dim=fused_dim, 
-            num_heads=16, 
+            num_heads=num_heads, 
             dropout=dropout, 
             batch_first=True
         )

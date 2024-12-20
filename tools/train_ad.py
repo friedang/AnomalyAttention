@@ -1,6 +1,7 @@
 from pathlib import Path
 import torch
 import torch.nn as nn
+from torch.nn.utils import clip_grad_norm_
 import torch.optim as optim
 from torch.utils.data import DataLoader
 import torch.distributed as dist
@@ -37,7 +38,7 @@ class FocalLoss(nn.Module):
         """
         super(FocalLoss, self).__init__()
         if alpha is None:
-            self.alpha = torch.tensor([0.5, 0.5])  # Default to equal weighting
+            self.alpha = torch.tensor([1, 1])  # Default to equal weighting
         else:
             self.alpha = alpha if isinstance(alpha, torch.Tensor) else torch.tensor(alpha)  # Pass computed class weights
         self.gamma = gamma
@@ -115,21 +116,26 @@ def save_gradients(grad):
     return grad
 
 # Define BCEWithLogitsLoss with masking support
-def masked_bce_loss(predictions, labels, class_weights=None):
+def masked_loss(predictions, labels, class_weights=None):
     # set_trace()
     loss_fn = FocalLoss(alpha=class_weights, gamma=2.0) if class_weights is not None else nn.BCEWithLogitsLoss() # 
+    # loss_fn = nn.BCEWithLogitsLoss() # 
     loss = loss_fn(predictions, labels)
     # loss = loss * mask  # Apply mask to ignore padding
     loss = loss.mean() if class_weights is not None else loss.sum()
     return loss
 
 def compute_accuracy(outputs, labels, threshold=0.5):
-    preds = (torch.sigmoid(outputs) > threshold).float()
-    correct = (preds == labels).float()
-    return correct.sum() / len(labels)
+    sigmoid = nn.Sigmoid()
+    confidences = sigmoid(outputs).cpu().numpy()
+    predictions = (confidences >= threshold).astype(int)
+    matches = np.sum(labels.cpu().numpy() == predictions)
+    total_predictions = len(predictions)
+    correct_preds_percentage = (matches / total_predictions) * 100
+    return correct_preds_percentage
 
 # Validation step
-def validate(model, dataloader, device, class_weights=None):
+def validate(model, dataloader, device, args=None, pc=True, tuning=False):
     model.eval()
     running_val_loss = 0.0
     running_val_acc = 0.0
@@ -140,11 +146,13 @@ def validate(model, dataloader, device, class_weights=None):
             tp, inputs = tp.to(device), inputs.to(device)
 
             # Skip if all labels are padding
+            # if tuning and any([inputs[0, i, -1] for i in range(inputs.shape[1]) if inputs[0, i, -1] in [1, 5]]):
+            #     continue
             if torch.all(tp == -500):
                 continue
 
             # Process point clouds if necessary
-            if args.pc or args.track_pc or args.voxel:
+            if pc:
                 pc_batch = process_point_clouds(meta, args)                    
                 pc_batch = torch.tensor(np.stack(pc_batch, axis=0)).float().to(device)
                 inputs = (inputs, pc_batch)
@@ -159,17 +167,22 @@ def validate(model, dataloader, device, class_weights=None):
             masked_outputs = outputs[mask.bool()] 
             masked_labels = tp[mask.bool()] 
 
+            # Compute loss
+            loss = masked_loss(masked_outputs, masked_labels)
+            running_val_loss += loss.item()
+
             # Compute accuracy
             accuracy = compute_accuracy(masked_outputs, masked_labels)
             running_val_acc += accuracy.item() * masked_labels.size(0)
             total_samples += masked_labels.size(0)
 
     # Average loss and accuracy
+    avg_loss = running_val_loss / len(dataloader)
     avg_acc = running_val_acc / total_samples if total_samples > 0 else 0
-    return avg_acc
+    return avg_loss, avg_acc
 
 
-def process_point_clouds(meta, args, inf=False):
+def process_point_clouds(meta, args=None, val=False):
     tokens = meta[0]
     token_len = len(tokens[0])
     pc_batch = []
@@ -178,10 +191,10 @@ def process_point_clouds(meta, args, inf=False):
         dummy_status = True
         for t in tokens:
             if t[i] != "dummy":
-                if inf:
-                    pointcloud_path = Path('/workspace/CenterPoint/work_dirs/PCs_npy_vox/val') / f"{t[i]}.npy" if args.voxel else Path('/workspace/CenterPoint/work_dirs/PCs_npy/val') / f"{t[i]}.npy"
+                if val:
+                    pointcloud_path = Path('/workspace/CenterPoint/work_dirs/PCs_npy_vox/val') / f"{t[i]}.npy" # if args and args.voxel else Path('/workspace/CenterPoint/work_dirs/PCs_npy/val') / f"{t[i]}.npy"
                 else:
-                    pointcloud_path = Path('/workspace/CenterPoint/work_dirs/PCs_npy_vox/train') / f"{t[i]}.npy" if args.voxel else Path('/workspace/CenterPoint/work_dirs/PCs_npy/train') / f"{t[i]}.npy"
+                    pointcloud_path = Path('/workspace/CenterPoint/work_dirs/PCs_npy_vox/train') / f"{t[i]}.npy" # if args and args.voxel else Path('/workspace/CenterPoint/work_dirs/PCs_npy/train') / f"{t[i]}.npy"
                 pc_batch.append(np.load(str(pointcloud_path)).T)
                 dummy_status = False
                 break
@@ -218,6 +231,10 @@ def train(rank, world_size, args):
         shutil.copy(args.scenes_info.replace('scene2trackname.json', 'train_chunks.pt'), args.workdir)
 
     # assert train_dataset.chunks != val_dataset.chunks
+    # if args.single_class:
+    #     train_dataset.chunks = [chunk for chunk in train_dataset.chunks if args.single_class in [c['detection_name'] for c in chunk]]
+    #     val_dataset.chunks = [chunk for chunk in val_dataset.chunks if args.single_class in [c['detection_name'] for c in chunk]]
+
     logging.info(f"Training on {len(train_dataset)} samples - Validation on {len(val_dataset)} samples.")
 
     label_arrays = [tp[0][tp[0] != -500].cpu().numpy() for tp in train_dataset.chunks]
@@ -225,7 +242,7 @@ def train(rank, world_size, args):
     # creating class weights
     logging.info('FOR TRAINING')
     data = []
-    for l in label_arrays:
+    for l in label_arrays:  
         data.extend(l)
     data = np.array(data)
     num_1 = len([i for i in data if i == 1])
@@ -262,7 +279,12 @@ def train(rank, world_size, args):
     elif args.pc:
         model = PCTrackMLPClassifier() # input_size=12, hidden_size=128, num_layers=3)
     elif args.voxel:
-        model = VoxelTrackMLPClassifier() # (input_size=12, hidden_size=128, num_layers=3)
+        model = VoxelTrackMLPClassifier(
+        hidden_size=512,
+        num_layers=6,
+        num_heads=16,
+        mlp_feature_dim=512
+    ) # (input_size=12, hidden_size=128, num_layers=3)
     else:
         model = TrackMLPClassifier() # (input_size=12, hidden_size=128, num_layers=3)
 
@@ -274,7 +296,8 @@ def train(rank, world_size, args):
         model = DDP(model, device_ids=[rank])
 
     # Set up optimizer
-    optimizer = optim.Adam(model.parameters(), lr=args.lr)
+    optimizer = optim.Adam(model.parameters(), lr=args.lr) # , weight_decay=0.01)
+    # scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=10, gamma=0.5)
 
     # Option to resume from checkpoint
     if args.resume_from:
@@ -295,14 +318,14 @@ def train(rank, world_size, args):
         wandb.watch(model)
     
     log_model_info(model)
+    logging.info(f"WandB Run Name: {wandb.run.name}")
 
-    steps_per_epoch = int(np.ceil(len(train_dataset.chunks) / args.batch_size))
-    total_steps = steps_per_epoch * args.epochs
-    lr_max = 0.1
-    moms = [0.85, 0.95]
-    div_factor = 25
-    pct_start = 0.3
-
+    # steps_per_epoch = int(np.ceil(len(train_dataset.chunks) / args.batch_size))
+    # total_steps = steps_per_epoch * args.epochs
+    # lr_max = 0.1
+    # moms = [0.85, 0.95]
+    # div_factor = 25
+    # pct_start = 0.3
     # scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=20, gamma=0.1) # torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=300, eta_min=1e-6)
 
     # Training loop
@@ -339,31 +362,43 @@ def train(rank, world_size, args):
 
             # Compute loss
             weights = class_weights
-            if len(meta) == 3:
+            detection_ids = meta[1]
+            detection_ids = [t[0] for t in detection_ids]
+            
+            if len(meta) == 3 and not any(['gt' in i for i in detection_ids]):
                 weights = torch.zeros_like(tp)
                 dist_tps = meta[2].to(device)
                 B, N, _ = weights.shape
                 
                 for b in range(B):
                     for n in range(N):
-                        # set_trace()
                         num_tp = len([t for t in dist_tps[b][n] if t == 1])
                         if num_tp == 0:
                             weights[b][n] = class_weights[0]
                         elif num_tp == 1:
                             weights[b][n] = class_weights[1]
                         elif num_tp == 2:
-                            weights[b][n] = class_weights[1] * 1.1
+                            weights[b][n] = class_weights[1] * 2 # 1.15
                         elif num_tp == 3:
-                            weights[b][n] = class_weights[1] * 1.2
+                            weights[b][n] = class_weights[1] * 3 #1.3
                         else:
-                            weights[b][n] = class_weights[1] * 1.25  # * num_tp
+                            weights[b][n] = class_weights[1] * 4 # 1.45 # * 1.25  # * num_tp
 
                 weights = weights.to(device)
                 weights = weights[mask.bool()]
-                    
-            loss = masked_bce_loss(masked_outputs, masked_labels, weights)
+                # weights = [0, weights[weights != 0].mean().item()]
+            # run was with gt, weights * 0.5, max norm 5, and weights max 1.45 worked dauntless-glade-378
+            # next run was with gt, weights * 0.5, max norm 30, and weights max 2.5 worked
+            elif any(['gt' in i for i in detection_ids]):
+                # set_trace()
+                weights = weights * 0.5
+                # weights = torch.ones_like(tp) * 0.5
+                # weights = weights[mask.bool()].to(device)
+            
+            # last run was with gt, max norm 5, and weights max 1.45
+            loss = masked_loss(masked_outputs, masked_labels, weights)
             loss.backward()
+            clip_grad_norm_(model.parameters(), max_norm=30, norm_type=2)
             optimizer.step()
 
             running_loss += loss.item()
@@ -378,14 +413,6 @@ def train(rank, world_size, args):
             dist.barrier()
         if rank == 0 or args.world_size == 1:  # Only the master node logs
             if (epoch + 1) % 5 == 0:
-                # Validation step
-                val_loss = validate(model, val_loader, device) # , class_weights)
-
-                avg_train_loss = running_loss / len(train_loader)
-                logging.info(f"Epoch {epoch + 1}, Train Loss: {avg_train_loss}, Val Accuracy: {val_loss}")
-                print(f"Epoch {epoch + 1}, Train Loss: {avg_train_loss}, Val Accuracy: {val_loss}")
-                wandb.log({"Train Loss": avg_train_loss, "Val Accuracy": val_loss})
-
                 # Save checkpoint
                 checkpoint_path = os.path.join(args.workdir, f"epoch_{epoch + 1}.pt")
                 torch.save({
@@ -393,6 +420,15 @@ def train(rank, world_size, args):
                     'model_state_dict': model.state_dict(),
                     'optimizer_state_dict': optimizer.state_dict(),
                     }, checkpoint_path)
+
+                # Validation step
+                pc = True if (args.track_pc or args.voxel) else False
+                val_loss, val_acc = validate(model, val_loader, device, pc=pc) # , class_weights)
+
+                avg_train_loss = running_loss / len(train_loader)
+                logging.info(f"Epoch {epoch + 1}, Train Loss: {avg_train_loss}, Val Accuracy: {val_acc}, Val Loss: {val_loss}")
+                print(f"Epoch {epoch + 1}, Train Loss: {avg_train_loss}, Val Accuracy: {val_acc}, Val Loss: {val_loss}")
+                wandb.log({"Train Loss": avg_train_loss, "Val Accuracy": val_acc, "Val Loss": val_loss})
             else:
                 avg_train_loss = running_loss / len(train_loader)
                 logging.info(f"Epoch {epoch + 1}, Train Loss: {avg_train_loss}")
@@ -407,7 +443,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument('--epochs', type=int, default=100, help="Number of training epochs")
     parser.add_argument('--batch_size', type=int, default=24, help="Batch size per GPU") # 22 for non freezed
-    parser.add_argument('--lr', type=float, default=1e-5, help="Learning rate")
+    parser.add_argument('--lr', type=float, default=1e-4, help="Learning rate")
     parser.add_argument('--world_size', type=int, default=1, help="Number of GPUs for distributed training")
     parser.add_argument('--scenes_info', type=str, help="Path to scenes info")
     parser.add_argument('--run_name', type=str, default='', help="wandb run name")
@@ -422,6 +458,7 @@ if __name__ == "__main__":
     parser.add_argument('--resume_from', type=str, help="Checkpoint resume from file")
     parser.add_argument('--sample_ratio', type=float, default=0.85, help="Ratio for training/validation")
     parser.add_argument("--local_rank", type=int, default=0)
+    parser.add_argument("--single_class", action="store_true")
 
     args = parser.parse_args()
     if "LOCAL_RANK" not in os.environ:
@@ -440,4 +477,15 @@ if __name__ == "__main__":
             # Use torch.multiprocessing.spawn to launch distributed training
             torch.multiprocessing.spawn(train, args=(world_size, args), nprocs=world_size, join=True)
         else:
-            train(0, world_size, args)
+            if args.single_class:
+                workdir = args.workdir
+                for i in ['car', 'bus', 'trailer', 'truck', 'pedestrian', 'bicycle', 'motorcycle', 'construction_vehicle', 'barrier', 'traffic_cone']:
+                    args.workdir = os.path.join(workdir, f"class_{i}")
+                    if not os.path.isdir(args.workdir):
+                        os.mkdir(args.workdir)
+                    args.single_class = i
+                    # set_trace()
+                    train(0, world_size, args)
+            else:
+                train(0, world_size, args)
+

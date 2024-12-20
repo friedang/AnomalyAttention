@@ -1,6 +1,7 @@
 import json
 from typing import Dict, List
 from typing import Callable
+import tqdm
 
 import numpy as np
 from nuscenes.eval.detection.evaluate import DetectionEval
@@ -74,7 +75,8 @@ def accumulate(gt_boxes: EvalBoxes,
     # ---------------------------------------------
 
     taken = set()  # Initially no gt bounding box is matched.
-    for pred_box in pred_boxes_list:
+    print('Match and accumulate match data.')
+    for pred_box in tqdm.tqdm(pred_boxes_list):
         min_dist = np.inf
         match_gt_idx = None
 
@@ -199,13 +201,14 @@ def classify_detections(detection_results, nusc, eval_split, result_path, output
     # Initialize the DetectionEval object
     cfg = config_factory('detection_cvpr_2019')
     nusc_eval = DetectionEval(nusc, config=cfg, result_path=result_path, eval_set=eval_split, output_dir=output_dir, verbose=False)
-    
+
     # Run evaluation
     nusc_eval.evaluate()
 
     # Convert detection_results to EvalBoxes
     pred_boxes = EvalBoxes()
-    for sample_token, preds in detection_results['results'].items():
+    print('Convert detection_results to EvalBoxes')
+    for sample_token, preds in tqdm.tqdm(detection_results['results'].items()):
         for result in preds:
             if sample_token not in pred_boxes.boxes:
                 pred_boxes.boxes[sample_token] = []
@@ -227,13 +230,15 @@ def classify_detections(detection_results, nusc, eval_split, result_path, output
     tp_classification = {k: {} for k in detection_results['results'].keys()}
 
     # Iterate through classes
-    for class_name in nusc_eval.cfg.class_names:
+    print('Classifying detection - Iterate through classes')
+    for class_name in tqdm.tqdm(nusc_eval.cfg.class_names):
         # Get distance function and threshold for this class
         dist_fcn = nusc_eval.cfg.dist_fcn_callable
 
         # Accumulate metrics
         _, tokens, dist_tps = accumulate(gt_boxes, pred_boxes, class_name, dist_fcn)
 
+        # set_trace()
         # Update TP classification
         for i, sample_token in enumerate(tokens):
             dist_TP = [dist_tps[j][i] for j in range(4)]
@@ -243,7 +248,8 @@ def classify_detections(detection_results, nusc, eval_split, result_path, output
 
     # set_trace()
     # Add TP classification to detection results
-    for sample_token, preds in detection_results['results'].items():
+    print('Add TP classification to detection results')
+    for sample_token, preds in tqdm.tqdm(detection_results['results'].items()):
         for result in preds:
             class_name = result['detection_name']
             if class_name in tp_classification[sample_token]:
@@ -271,7 +277,7 @@ def classify_detections(detection_results, nusc, eval_split, result_path, output
 def main():
     # Load the JSON file
     # input_file = '/workspace/CenterPoint/work_dirs/ad_mlp_05/Resnet_baseline_with_Focal_gt/nusc_validation/immo_results.json'
-    input_file = "/workspace/CenterPoint/work_dirs/immo/cp_5_seed_2hz_org01/results.json"
+    input_file = "/workspace/CenterPoint/work_dirs/immo/results/results.json"
     output_file = input_file.replace('.json', '_tp.json')
     output_dir = input_file.replace('results.json', '')
     detection_results = load_json(input_file)
