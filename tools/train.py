@@ -146,6 +146,7 @@ def main():
         set_random_seed(args.seed)
 
     model = build_detector(cfg.model, train_cfg=cfg.train_cfg, test_cfg=cfg.test_cfg)
+    # import ipdb; ipdb.set_trace()
     if not distributed and args.gpu_ids: # TODO replace
             model = model.to(torch.device(f"cuda:{args.gpu_ids[0]}")) 
 

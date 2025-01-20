@@ -33,10 +33,10 @@ from tools.train_ad import validate, masked_loss, process_point_clouds
 
 def objective(trial):
     # Parameter space for Optuna
-    lr = trial.suggest_float("lr", 1e-6, 1e-3)
-    # max_norm = trial.suggest_int("max_norm", 6, 30, step=6)
+    lr = trial.suggest_float("lr", 1e-5, 5e-3)
+    max_norm = trial.suggest_int("max_norm", 6, 30, step=6)
     weights_type = trial.suggest_categorical("weights_type", ["small", "medium", "big"])
-    # weights_gt = trial.suggest_float("weights_gt", 0.5, 1)
+    weights_gt = trial.suggest_float("weights_gt", 0.5, 1)
     weight_decay = trial.suggest_float("weight_decay", 1e-6, 1e-3)
     scheduler_type = trial.suggest_categorical("scheduler", ["step", "plateau", "none"])
     optimizer_name = trial.suggest_categorical("optimizer", ["Adam", "AdamW"])
@@ -58,21 +58,21 @@ def objective(trial):
 
     # Model setup
     model = VoxelTrackMLPClassifier(
-        hidden_size=hidden_size,
-        num_layers=num_layers,
-        num_heads=num_heads,
-        mlp_feature_dim=mlp_feature_dim
+        hidden_size=384,
+        num_layers=6,
+        num_heads=2,
+        mlp_feature_dim=192
     ).cuda()
 
     if optimizer_name == "Adam":
         optimizer = torch.optim.Adam(model.parameters(), lr=lr,) # weight_decay=weight_decay)
     elif optimizer_name == "AdamW":
-        optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=weight_decay)
+        optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=weight_decay) # 0.0003)
     
     if scheduler_type == "step":
         scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=5, gamma=0.1)
     elif scheduler_type == "plateau":
-        scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode="max", patience=3)
+        scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode="min", patience=5, verbose=True)
     else:
         scheduler = None
 
@@ -92,7 +92,7 @@ def objective(trial):
     for epoch in range(20):
         model.train()
         running_loss = 0.0
-        patience = 4
+        patience = 30
         for batch in tqdm(train_loader, desc=f"Epoch {epoch + 1}"):
             optimizer.zero_grad()
 
@@ -122,12 +122,12 @@ def objective(trial):
 
             # Compute loss
             weights = class_weights
-            if weights_type == 'small':
-                w = [1.15, 1.3, 1.45]
-            elif weights_type == 'medium':
-                w = [1.3, 1.6, 1.9]
-            else:
-                w = [1.5, 2, 2.5]
+            # if weights_type == 'small':
+            #     w = [1.15, 1.3, 1.45]
+            # elif weights_type == 'medium':
+            #     w = [1.3, 1.6, 1.9]
+            # else:
+            w = [1.5, 2, 2.5]
             
             if len(meta) == 3 and not any(['gt' in i for i in detection_ids]):
                 weights = torch.zeros_like(tp)
@@ -188,11 +188,11 @@ def objective(trial):
             print(f"Trial {trial.number} stopped early due to no improvement.")
             raise optuna.TrialPruned()
 
-    return val_acc
+    return val_loss
 
 
 if __name__ == "__main__":
-    n_startup_trials = 20
+    n_startup_trials = 10
     n_jobs=1
     n_warmup_steps=4
     study_name = 'Voxel_AT'

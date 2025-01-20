@@ -163,13 +163,13 @@ test_pipeline = [
     dict(type="Reformat"),
 ]
 
-train_anno = "work_dirs/10_nusc_centerpoint_voxelnet_0075voxel_fix_bn_z/train_gt_and_pseudo_gt.pkl" # "data/nuScenes/infos_train_10sweeps_withvelo_filter_True.pkl"
+train_anno = "work_dirs/10_nusc_centerpoint_voxelnet_0075voxel_fix_bn_z/seed_and_pseudoAD_gt.pkl" # "data/nuScenes/infos_train_10sweeps_withvelo_filter_True.pkl"
 val_anno = "data/nuScenes/infos_val_10sweeps_withvelo_filter_True.pkl"
 project_name="cp_10seed_90pseudo_sc03"
 test_anno = None
 
 data = dict(
-    samples_per_gpu=20,
+    samples_per_gpu=24,
     workers_per_gpu=2,
     train=dict(
         type=dataset_type,
@@ -231,9 +231,9 @@ evaluation = dict(interval=5)
 device_ids = range(2)
 dist_params = dict(backend="nccl", init_method="env://")
 log_level = "INFO"
-work_dir = './work_dirs/{}/'.format(__file__[__file__.rfind('/') + 1:-3])
+work_dir = './work_dirs/AD_{}/'.format(__file__[__file__.rfind('/') + 1:-3])
 load_from = './work_dirs/10_nusc_centerpoint_voxelnet_0075voxel_fix_bn_z/latest.pth'
-resume_from = None 
+resume_from = None # './work_dirs/pseudo90_nusc_centerpoint_voxelnet_0075voxel_fix_bn_z/epoch_13.pth'
 workflow = [('train', 1)]
 
 import os

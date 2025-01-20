@@ -2,8 +2,10 @@ import json
 from typing import Dict, List
 from typing import Callable
 import tqdm
+import os
 
 import numpy as np
+from nuscenes.eval.detection.data_classes import DetectionConfig
 from nuscenes.eval.detection.evaluate import DetectionEval
 from nuscenes.eval.detection.config import config_factory
 from nuscenes.eval.detection.data_classes import DetectionBox
@@ -35,9 +37,9 @@ def accumulate(gt_boxes: EvalBoxes,
 
     # Count the positives.
     npos = len([1 for gt_box in gt_boxes.all if gt_box.detection_name == class_name])
-    if verbose:
-        print("Found {} GT of class {} out of {} total across {} samples.".
-              format(npos, class_name, len(gt_boxes.all), len(gt_boxes.sample_tokens)))
+    # if verbose:
+    #     print("Found {} GT of class {} out of {} total across {} samples.".
+    #           format(npos, class_name, len(gt_boxes.all), len(gt_boxes.sample_tokens)))
 
     # For missing classes in the GT, return a data structure corresponding to no predictions.
     if npos == 0:
@@ -48,9 +50,9 @@ def accumulate(gt_boxes: EvalBoxes,
     tokens = [box.sample_token for box in pred_boxes_list]
     pred_confs = [box.detection_score for box in pred_boxes_list]
 
-    if verbose:
-        print("Found {} PRED of class {} out of {} total across {} samples.".
-              format(len(pred_confs), class_name, len(pred_boxes.all), len(pred_boxes.sample_tokens)))
+    # if verbose:
+    #     print("Found {} PRED of class {} out of {} total across {} samples.".
+    #           format(len(pred_confs), class_name, len(pred_boxes.all), len(pred_boxes.sample_tokens)))
 
     # Sort by confidence.
     # sortind = [i for (v, i) in sorted((v, i) for (i, v) in enumerate(pred_confs))][::-1]
@@ -199,7 +201,13 @@ def save_json(data, file_path):
 
 def classify_detections(detection_results, nusc, eval_split, result_path, output_dir):
     # Initialize the DetectionEval object
-    cfg = config_factory('detection_cvpr_2019')
+    this_dir = os.path.dirname(os.path.abspath(__file__))
+    cfg_path = os.path.join('/workspace/CenterPoint/det3d/datasets/nuscenes/', 'AD_detection.json')
+    assert os.path.exists(cfg_path), \
+        'Requested unknown configuration AD_detection.json'
+    with open(cfg_path, 'r') as f:
+        data = json.load(f)
+    cfg = DetectionConfig.deserialize(data)
     nusc_eval = DetectionEval(nusc, config=cfg, result_path=result_path, eval_set=eval_split, output_dir=output_dir, verbose=False)
 
     # Run evaluation
@@ -268,8 +276,8 @@ def classify_detections(detection_results, nusc, eval_split, result_path, output
     tps = [t for d in detection_results['results'].values() for t in d if t['TP']==1]
     fps = [t for d in detection_results['results'].values() for t in d if t['TP']==0]
 
-    print(f"Number of TPs are {tps}")
-    print(f"Number of FPs are {fps}")
+    print(f"Number of TPs are {len(tps)}")
+    print(f"Number of FPs are {len(fps)}")
 
     return detection_results
 
@@ -313,12 +321,12 @@ def main():
     
     # Classify detections
     updated_results = classify_detections(detection_results, nusc, 'train', input_file, output_dir)
+    # Save the updated JSON file
+    save_json(updated_results, output_file)
+
     print(f"Number of non dummy items in dets is {len([v for values in updated_results['results'].values() for v in values if v['TP'] != -500])}")
     print(f"Number of TP in dets is {len([v for values in updated_results['results'].values() for v in values if v['TP'] == 1])}")
     print(f"Number of FP in dets is {len([v for values in updated_results['results'].values() for v in values if v['TP'] == 0])}")
-
-    # Save the updated JSON file
-    save_json(updated_results, output_file)
 
     print(f"Updated results saved to {output_file}")
 

@@ -16,7 +16,8 @@ def plot_pr_confidence(precision, recall, thresholds, workdir, name):
     plt.figure()
     PrecisionRecallDisplay(precision=precision, recall=recall).plot()
     plt.title(f"Precision-Recall Curve {name}")
-    plt.savefig(os.path.join(workdir, f"precision_recall_curve_{name}.png"))
+    plt.savefig(os.path.join(workdir, f"precision_recall_curve_{name}.png"), bbox_inches='tight', format='png', dpi=300)
+    plt.savefig(os.path.join(workdir, f"precision_recall_curve_{name}.eps"), bbox_inches='tight', format='eps', dpi=300)
 
     # Precision-Confidence plot
     plt.figure()
@@ -24,7 +25,8 @@ def plot_pr_confidence(precision, recall, thresholds, workdir, name):
     plt.xlabel("Confidence Threshold")
     plt.ylabel("Precision")
     plt.title(f"Precision vs. Confidence {name}")
-    plt.savefig(os.path.join(workdir, f"precision_confidence_curve_{name}.png"))
+    plt.savefig(os.path.join(workdir, f"precision_confidence_curve_{name}.png"), bbox_inches='tight', format='png', dpi=300)
+    plt.savefig(os.path.join(workdir, f"precision_confidence_curve_{name}.eps"), bbox_inches='tight', format='eps', dpi=300)
 
     # Recall-Confidence plot
     plt.figure()
@@ -32,7 +34,8 @@ def plot_pr_confidence(precision, recall, thresholds, workdir, name):
     plt.xlabel("Confidence Threshold")
     plt.ylabel("Recall")
     plt.title(f"Recall vs. Confidence {name}")
-    plt.savefig(os.path.join(workdir, f"recall_confidence_curve_{name}.png"))
+    plt.savefig(os.path.join(workdir, f"recall_confidence_curve_{name}.png"), bbox_inches='tight', format='png', dpi=300)
+    plt.savefig(os.path.join(workdir, f"recall_confidence_curve_{name}.eps"), bbox_inches='tight', format='eps', dpi=300)
     plt.close()
 
 
@@ -44,7 +47,7 @@ def plot_confusion_matrix(y_true, y_pred, workdir, name):
     # Create the plot
     plt.figure()
     plt.imshow(cm, interpolation='nearest', cmap=plt.cm.Blues)
-    plt.title(f"Confusion Matrix {name}")
+    plt.title(f"Confusion Matrix - 100% Seed Test Case") # plt.title(f"Confusion Matrix {name}")
     plt.colorbar()
 
     # Add labels for the axes
@@ -63,7 +66,8 @@ def plot_confusion_matrix(y_true, y_pred, workdir, name):
                      color="white" if cm[i, j] > thresh else "black")
 
     # Save the confusion matrix plot
-    plt.savefig(os.path.join(workdir, f"confusion_matrix_{name}.png"))
+    plt.savefig(os.path.join(workdir, f"confusion_matrix_{name}.png"), bbox_inches='tight', format='png', dpi=300)
+    plt.savefig(os.path.join(workdir, f"confusion_matrix_{name}.eps"), bbox_inches='tight', format='eps', dpi=300)
     plt.close()  # Close the figure after saving to avoid display in notebooks
 
 
@@ -119,7 +123,8 @@ def plot_pr():
     plt.grid(True)
     plt.xlim([0, 1])
     plt.ylim([0, 1])
-    plt.savefig(f"{detailed_results_path.replace('metrics_details.json', 'car')}.png")
+    plt.savefig(f"{detailed_results_path.replace('metrics_details.json', 'car')}.png", bbox_inches='tight', format='png', dpi=300)
+    plt.savefig(f"{detailed_results_path.replace('metrics_details.json', 'car')}.eps", bbox_inches='tight', format='eps', dpi=300)
 
 
 def track_length_bar(data=None, work_dir=None, filter=None):
@@ -131,7 +136,7 @@ def track_length_bar(data=None, work_dir=None, filter=None):
         data = list(tracks.values()) if not 'results' in tracks.keys() else list(tracks['results'].values())
         lengths = [len(t) for t in data]
 
-        data = load_json('/workspace/CenterPoint/work_dirs/ad_pc_mlp_05/total_seed_org01th/plot_dir/data_for_plots.json')
+        data = load_json('/workspace/CenterPoint/work_dirs/ad_pc_mlp_05/total_Seed_org01th/plot_dir/data_for_plots.json')
         all_labels = np.array(data['gt_labels'])
         all_predictions = np.array(data['predictions'])
         all_lengths = data['track_lengths']
@@ -181,13 +186,13 @@ def track_length_bar(data=None, work_dir=None, filter=None):
     ax = sns.barplot(data=df, x='Track Length', y='Frequency', hue='TP', palette={'Correct': 'g', 'False': 'r'})
 
 
-    label = ['TNR', 'FNR'] if filter == 'anomaly' else ['TPR', 'FPR']
+    label = ['TNR', 'FNR'] if not filter == 'anomaly' else ['TPR', 'FPR']
 
     tpr_values = [f"{rate:.2f}" if not np.isnan(rate) else "N/A" for rate in correct_rate]
     fpr_values = [f"{rate:.2f}" if not np.isnan(rate) else "N/A" for rate in false_rate]
     table_data = {"Track Length": list_lengths, f"{label[0]}": tpr_values, f"{label[1]}": fpr_values}
 
-    # Create the table
+
     table = plt.table(
         cellText=[list(table_data.values())[i] for i in range(len(table_data))],
         rowLabels=list(table_data.keys()),
@@ -195,7 +200,10 @@ def track_length_bar(data=None, work_dir=None, filter=None):
         cellLoc="center",
         loc="bottom",
         bbox=[0, -0.3, 1, 0.15],  # Adjust position and size
+        fontsize=16,
     )
+
+    # Update the layout
     plt.subplots_adjust(bottom=0.3)
 
 
@@ -220,110 +228,22 @@ def track_length_bar(data=None, work_dir=None, filter=None):
     # sns.histplot(tp_1_len_counts, kde=False, color='g', label='Correct', bins=42) # , alpha=0.6)
     # sns.histplot(tp_0_len_counts, kde=False, color='r', label='False', bins=42) # , alpha=0.6)
 
-    title = 'Predictions by Track Length' if not filter else f"Predictions by Track Length {filter}"
+    if filter:
+        filter = 'Anomaly' if filter == 'anomaly' else 'Nomaly'
+
+    title = f"Predictions by Track Length - 100% Seed" if not filter else f"{filter} Predictions by Track Length - 100% Seed"
     plt.title(title)
     plt.xlabel('Track Length')
     plt.ylabel('Frequency')
     plt.legend()
 
-    file_name = 'track_length_hist.png' if not filter else f"track_length_hist_{filter}.png"
+    file_name = 'track_length_hist.png' if not filter else f"track_length_hist_{filter}"
     # Save the plot
-    out = work_dir + '/' + file_name if work_dir else '/workspace/CenterPoint/work_dirs/' + file_name
-    plt.savefig(out)
+    out = work_dir + '/' + file_name  + ".png" if work_dir else '/workspace/CenterPoint/work_dirs/' + file_name + ".png"
+    plt.savefig(out, bbox_inches='tight', format='png', dpi=300)
+    plt.savefig(out.replace('png', 'eps'), bbox_inches='tight', format='eps', dpi=300)
     plt.close()
 
-def track_score_bar(data=None, work_dir=None, filter=None):
-    if data:
-        labels, lengths = data  # labels are correct/false predictions in this case when it comes from test_ad.py
-        data = [[{'TP': l}] for l in labels]
-    else:
-        tracks = load_json('/workspace/CenterPoint/work_dirs/Center_point_original_nusc_0075_flip/immo_results/track_info.json')
-        data = list(tracks.values()) if not 'results' in tracks.keys() else list(tracks['results'].values())
-        lengths = [len(t) for t in data]
-
-        data = load_json('/workspace/CenterPoint/work_dirs/ad_pc_mlp_05/total_seed_org01th/plot_dir/data_for_plots.json')
-        all_labels = np.array(data['gt_labels'])
-        all_predictions = np.array(data['predictions'])
-        all_lengths = data['track_lengths']
-        all_scores = data['scores']
-        matches_array = (all_labels == all_predictions).astype(int)
-        anomaly_match_length = ([], [])
-        nomaly_match_length = ([], [])
-        for i, m in enumerate(matches_array):
-            if all_labels[i] == 0:
-                anomaly_match_length[0].append(m)
-                anomaly_match_length[1].append(all_lengths[i])
-            elif all_labels[i] == 1:
-                nomaly_match_length[0].append(m)
-                nomaly_match_length[1].append(all_lengths[i])
-
-        labels, lengths = nomaly_match_length  # labels are correct/false predictions in this case when it comes from test_ad.py
-        data = [[{'TP': l}] for l in labels]
-        filter = 'anomaly'
-
-    scores_tp_0 = [s for i, s in enumerate(all_scores) if all_labels[i] == 0]
-    scores_tp_1 = [s for i, s in enumerate(all_scores) if all_labels[i] == 1]
-
-    num_bins = 20  # Adjust the number of bins as needed
-    bins = np.linspace(0, 1, num_bins + 1)  # Create bin edges from 0 to 1
-    bin_labels = [f"{bins[i]:.1f}–{bins[i+1]:.1f}" for i in range(len(bins) - 1)]
-    bin_indices = np.digitize(all_scores, bins, right=False) - 1  # Assign scores to bins
-
-    frequency = np.bincount(bin_indices, minlength=num_bins)
-
-    tp_1_counts = np.zeros((max(num_bins),))
-    tp_0_counts = np.zeros((max(num_bins),))
-
-    for i, sublist in zip(bin_indices, matches_array):
-        tp_1_counts[i] += sum(entry['TP'] == 1 for entry in sublist)    
-        tp_0_counts[i] += sum(entry['TP'] == 0 for entry in sublist)
-
-    correct_rate = tp_1_counts / (tp_1_counts + tp_0_counts)
-    false_rate = np.ones_like(correct_rate) - correct_rate
-
-    # Lengths of the lists
-    list_lengths = np.arange(1, max(lengths)+1)
-
-    import pandas as pd
-    # Prepare data for Seaborn
-    df = pd.DataFrame({
-        'Track Length': np.concatenate([list_lengths, list_lengths]),
-        'Frequency': np.concatenate([tp_1_counts, tp_0_counts]),
-        'TP': ['Correct'] * len(tp_1_counts) + ['False'] * len(tp_0_counts)
-    })
-
-    # # Plot using Seaborn
-    plt.figure(figsize=(12, 6))
-    ax = sns.barplot(data=df, x='Track Length', y='Frequency', hue='TP', palette={'Correct': 'g', 'False': 'r'})
-
-
-    label = ['TNR', 'FNR'] if filter == 'anomaly' else ['TPR', 'FPR']
-
-    tpr_values = [f"{rate:.2f}" if not np.isnan(rate) else "N/A" for rate in correct_rate]
-    fpr_values = [f"{rate:.2f}" if not np.isnan(rate) else "N/A" for rate in false_rate]
-    table_data = {"Track Length": list_lengths, f"{label[0]}": tpr_values, f"{label[1]}": fpr_values}
-
-    # Create the table
-    table = plt.table(
-        cellText=[list(table_data.values())[i] for i in range(len(table_data))],
-        rowLabels=list(table_data.keys()),
-        colLabels=None,
-        cellLoc="center",
-        loc="bottom",
-        bbox=[0, -0.3, 1, 0.15],  # Adjust position and size
-    )
-    plt.subplots_adjust(bottom=0.3)
-
-    title = 'Predictions by Track Length' if not filter else f"Predictions by Track Length {filter}"
-    plt.title(title)
-    plt.xlabel('Track Length')
-    plt.ylabel('Frequency')
-    plt.legend()
-
-    file_name = 'track_length_hist.png' if not filter else f"track_length_hist_{filter}.png"
-    # Save the plot
-    out = work_dir + '/' + file_name if work_dir else '/workspace/CenterPoint/work_dirs/' + file_name
-    plt.savefig(out)
 
 def plot_ad_by_track_score(data=None, work_dir=None, filter=None):
     if data:
@@ -345,7 +265,7 @@ def plot_ad_by_track_score(data=None, work_dir=None, filter=None):
         scores_tp_1 = [entry['tracking_score'] for entry in data if entry['TP'] == 1 and entry['sample_token'] != 'dummy']
         scores_tp_0 = [entry['tracking_score'] for entry in data if entry['TP'] == 0 and entry['sample_token'] != 'dummy']
 
-        data = load_json('/workspace/CenterPoint/work_dirs/ad_pc_mlp_05/total_seed_org01th/plot_dir/data_for_plots.json')
+        data = load_json('/workspace/CenterPoint/work_dirs/ad_pc_mlp_05/total_Seed_org01th/plot_dir/data_for_plots.json')
         all_labels = np.array(data['gt_labels'])
         all_predictions = np.array(data['predictions'])
         all_scores = data['scores']
@@ -367,57 +287,63 @@ def plot_ad_by_track_score(data=None, work_dir=None, filter=None):
         # filter = 'anomaly'
 
 
-    # num_bins = 20  # Adjust the number of bins as needed
-    # bins = np.linspace(0, 1, num_bins + 1)  # Create bin edges from 0 to 1
-    # bin_labels = [f"{bins[i]:.1f}–{bins[i+1]:.1f}" for i in range(len(bins) - 1)]
-    # bin_indices = np.digitize(all_scores, bins, right=False) - 1  # Assign scores to bins
+    num_bins = 20  # Adjust the number of bins as needed
+    bins = np.linspace(0, 1, num_bins + 1)  # Create bin edges from 0 to 1
+    bin_labels = [f"{bins[i]:.1f}–{bins[i+1]:.1f}" for i in range(len(bins) - 1)]
+    bin_indices = np.digitize(all_scores, bins, right=False) - 1  # Assign scores to bins
 
-    # frequency = np.bincount(bin_indices, minlength=num_bins)
+    frequency = np.bincount(bin_indices, minlength=num_bins)
 
-    # tp_1_counts = np.zeros((num_bins,))
-    # tp_0_counts = np.zeros((num_bins,))
+    tp_1_counts = np.zeros((num_bins,))
+    tp_0_counts = np.zeros((num_bins,))
 
-    # for i, m in zip(bin_indices, matches_array):
-    #     if m == 1:
-    #         tp_1_counts[i] += 1
-    #     else:
-    #         tp_0_counts[i] += 1
+    for i, m in zip(bin_indices, data[0]):
+        if m == 1:
+            tp_1_counts[i] += 1
+        else:
+            tp_0_counts[i] += 1
 
-    # correct_rate = tp_1_counts / (tp_1_counts + tp_0_counts)
-    # false_rate = np.ones_like(correct_rate) - correct_rate
+    correct_rate = tp_1_counts / (tp_1_counts + tp_0_counts)
+    false_rate = np.ones_like(correct_rate) - correct_rate
 
-    # label = ['TNR', 'FNR'] if filter == 'anomaly' else ['TPR', 'FPR']
+    label = ['TNR', 'FNR'] if not filter == 'anomaly' else ['TPR', 'FPR']
 
-    # tpr_values = [f"{rate:.2f}" if not np.isnan(rate) else "N/A" for rate in correct_rate]
-    # fpr_values = [f"{rate:.2f}" if not np.isnan(rate) else "N/A" for rate in false_rate]
-    # table_data = {"ScoreBin": bin_labels, f"{label[0]}": tpr_values, f"{label[1]}": fpr_values}
+    tpr_values = [f"{rate:.2f}" if not np.isnan(rate) else "N/A" for rate in correct_rate]
+    fpr_values = [f"{rate:.2f}" if not np.isnan(rate) else "N/A" for rate in false_rate]
+    table_data = {"ScoreBin": bin_labels, f"{label[0]}": tpr_values, f"{label[1]}": fpr_values}
 
-    # # Create the table
-    # table = plt.table(
-    #     cellText=[list(table_data.values())[i] for i in range(len(table_data))],
-    #     rowLabels=list(table_data.keys()),
-    #     colLabels=None,
-    #     cellLoc="center",
-    #     loc="bottom",
-    #     bbox=[0, -0.3, 1, 0.15],  # Adjust position and size
-    # )
-    plt.subplots_adjust(bottom=0.3)
+    if filter:
+        filter = 'Anomaly' if filter == 'anomaly' else 'Nomaly'
 
     plt.figure(figsize=(10, 6))
     sns.histplot(scores_tp_1, kde=False, color='g', label='Correct', bins=20, alpha=0.6)
     sns.histplot(scores_tp_0, kde=False, color='r', label='False', bins=20, alpha=0.6)
 
     # Customize plot
-    title = 'Histogram of Tracking Scores by TP Value' if not filter else f"Histogram of Tracking Scores by TP Value {filter}"
+    title = f"Predictions by Detection Scores - 100% Seed" if not filter else f"{filter} Predictions by Detection Scores - 100% Seed"
     plt.title(title)
-    plt.xlabel('Tracking Score')
+    plt.xlabel('Detection Score')
     plt.ylabel('Frequency')
     plt.legend()
+
+    # Create the table
+    table = plt.table(
+        cellText=[list(table_data.values())[i] for i in range(len(table_data))],
+        rowLabels=list(table_data.keys()),
+        colLabels=None,
+        cellLoc="center",
+        loc="bottom",
+        bbox=[0, -0.3, 1, 0.15],  # Adjust position and size
+    )
+    plt.subplots_adjust(bottom=0.3)
 
     # Save the plot
     file_name = 'tracking_score_histogram.png' if not filter else f"tracking_score_histogram_{filter}.png"
     out = work_dir + '/' + file_name if work_dir else '/workspace/CenterPoint/work_dirs/' + file_name
-    plt.savefig(out)
+    plt.savefig(out, bbox_inches='tight', format='png', dpi=300)
+    plt.savefig(out.replace('png', 'eps'), bbox_inches='tight', format='eps', dpi=300)
+    
+    
     plt.close()
 
 

@@ -9,6 +9,7 @@ import os
 import torch
 import wandb
 import tqdm
+import logging
 
 from ipdb import set_trace
 from functools import reduce
@@ -20,7 +21,7 @@ from nuscenes.nuscenes import NuScenes
 from nuscenes.eval.detection.config import config_factory
 from nuscenes.utils.splits import create_splits_scenes
 # except:
-    # print("nuScenes devkit not found!")
+    # logging.info("nuScenes devkit not found!")
 
 from det3d.datasets.custom import PointCloudDataset
 from det3d.datasets.nuscenes.utils import load_json, save_json
@@ -42,7 +43,7 @@ from typing import Dict, Union, Tuple
 class FalsePositiveAugmentation(torch.nn.Module):
     def __init__(
         self,
-        center_distance_threshold: float = 4.0,
+        center_distance_threshold: float = 4.5,
         fp_probability: float = 0.5
     ):
         """
@@ -61,31 +62,35 @@ class FalsePositiveAugmentation(torch.nn.Module):
         """Generate noise vector that exceeds the center distance threshold."""
         # Randomly decide how many dimensions to perturb (1, 2, or all 3)
         num_dims_to_modify = torch.randint(1, 3, (1,)).item()  # Randomly choose 1, 2
-        # num_dims_to_modif = 2
 
         # Create a mask for selected dimensions
         dim_indices = torch.randperm(2)[:num_dims_to_modify]  # Randomly select dimensions
         assert all([i in [0, 1] for i in dim_indices])
         mask = torch.zeros_like(translation, dtype=torch.bool)
-        mask[dim_indices] = True
+        
 
         # Generate noise for the selected dimensions
         noise = torch.randn_like(translation)
         noise = noise / torch.norm(noise)
 
-        # threshold = threshold / torch.sqrt(torch.tensor(num_dims_to_modify, dtype=torch.float))
-
         # Scale the noise to ensure the total displacement exceeds the threshold
         assert num_dims_to_modify in [1, 2]
         if num_dims_to_modify == 1:
-            scale = random.uniform(5.5, 8) 
+            scale = random.uniform(5.5, 8)
+            mask[dim_indices] = True
+            noise[mask] += scale
+
         elif num_dims_to_modify == 2:
-            scale = random.uniform(4.8, 6)
+            scale = random.uniform(4, 5)
+            mask[dim_indices[0]] = True
+            noise[mask] += scale
 
+            scale = random.uniform(4, 5)
+            mask[dim_indices[1]] = True
+            noise[mask] += scale
         
-        noise[mask] += scale
 
-        assert np.linalg.norm(noise.cpu().numpy()) > 4.5
+        assert np.linalg.norm(noise.cpu().numpy()) > self.center_distance_threshold
 
         return noise
 
@@ -100,6 +105,11 @@ class FalsePositiveAugmentation(torch.nn.Module):
         augmented_translation = torch.tensor(bbox['translation']) + translation_noise
         assert np.linalg.norm(np.array(augmented_translation[:2]) - np.array(bbox['translation'][:2])) > 4.5
         bbox['translation'] = augmented_translation.tolist()
+
+        bbox['rotation'] = (torch.tensor(bbox['rotation']) * torch.empty(1).uniform_(0.5, 1.5)).tolist()
+        bbox['size'] = (torch.tensor(bbox['size']) * torch.empty(1).uniform_(0.5, 1.5)).tolist()
+        bbox['num_lidar_pts'] = (torch.tensor(bbox['num_lidar_pts']) * torch.empty(1).uniform_(0.5, 1.5)).item()
+
         bbox['TP'] = 0
         bbox['dist_TP'] = [0, 0, 0, 0]
 
@@ -112,7 +122,7 @@ class FalsePositiveAugmentation(torch.nn.Module):
 
 class SceneDataset(Dataset):
     def __init__(self, scenes_info_path=None, track_info=None, gt_scenes_info_path=None, gt_track_info=None,
-                 load_chunks_from=None, sample_ratio=1, max_track_len=42, chunk_size=42, lengths_minimum=4, inference=False, single_class=None):
+                 load_chunks_from=None, sample_ratio=1, max_track_len=41, chunk_size=41, lengths_minimum=5, inference=False, single_class=None):
         # scenes is a dict where keys are scene names, and values are lists of tensors
         self.inference = inference
         self.chunks = []
@@ -125,10 +135,10 @@ class SceneDataset(Dataset):
         self.name_dict = {n: i+1 for n, i in zip(detection_names, range(len(detection_names)))}
 
         self.max_track_len = max_track_len
-        lengths_thresh = lengths_minimum
+        lengths_thresh = lengths_minimum - 1
         sample_ratio = None if sample_ratio == 1 else sample_ratio
 
-        self.fp_aug = FalsePositiveAugmentation(fp_probability=0.8)
+        self.fp_aug = FalsePositiveAugmentation(fp_probability=0.55) # 0.66
 
         if load_chunks_from:
             self.chunks = torch.load(load_chunks_from)
@@ -137,21 +147,28 @@ class SceneDataset(Dataset):
             track_info = json.load(open(track_info, 'r'))
             
             # Remove tracks if their lengths is smaller threshold
+            scenes_info = {k: v for k, v in scenes_info.items() if v != []}
             assert len([v for val in scenes_info.values() for v in val]) == len(track_info)
-            print(f"Number of tracks before threshold filtering: {len(track_info)}")
+            logging.info(f"Number of tracks before length threshold filtering: {len(track_info)}")
             num_dummy_pads = max_track_len - len(list(track_info.values())[0])
             if single_class:
                 track_info = {k: v + [self.dummy] * num_dummy_pads 
                               for k, v in track_info.items() if single_class in k and len([det for det in v if det['TP'] in [0, 1]]) > lengths_thresh}
+            elif sample_ratio:
+                track_info = {k: v + [self.dummy] * num_dummy_pads 
+                              for k, v in track_info.items() if 'car' not in k and 'ped' not in k and len([det for det in v if det['TP'] in [0, 1]]) > lengths_thresh}
             else:
                 track_info = {k: v + [self.dummy] * num_dummy_pads 
-                            for k, v in track_info.items() if 'car' not in k and 'ped' not in k and len([det for det in v if det['TP'] in [0, 1]]) > lengths_thresh}
+                              for k, v in track_info.items() if len([det for det in v if det['TP'] in [0, 1]]) > lengths_thresh}
+            
             scenes_info = {k: [name for name in v if name in track_info.keys()] for k, v in scenes_info.items()}
             assert len([v for val in scenes_info.values() for v in val]) == len(track_info)
-            print(f"Number of tracks after threshold filtering: {len(track_info)}")
+            logging.info(f"Number of tracks after length threshold filtering: {len(track_info)}")
+
+            # set_trace()
 
             max_scene_size = max([len(v) for v in scenes_info.values()])
-            print(f"Maximum Scene size is: {max_scene_size}")
+            logging.info(f"Maximum Scene size is: {max_scene_size}")
             self.scene_names = list(scenes_info.keys())
             if sample_ratio:
                 torch.manual_seed(random.randint(0, sys.maxsize))
@@ -174,9 +191,10 @@ class SceneDataset(Dataset):
                     else:
                         gt_track_info = {k: v + [self.dummy] * num_dummy_pads 
                                          for k, v in gt_track_info.items() if 'car' not in k and 'ped' not in k and len([det for det in v if det['TP'] in [0, 1]]) > lengths_thresh}
+                    # set_trace()
                     gt_scenes_info = {k: [name for name in v if name in gt_track_info.keys()] for k, v in gt_scenes_info.items()}
                     max_gt_scene_size = max([len(v) for v in gt_track_info.values()])
-                    print(f"Maximum GT Scene size is: {max_gt_scene_size}")
+                    logging.info(f"Maximum GT Scene size is: {max_gt_scene_size}")
             for i, split in enumerate(scene_split):
                 self.scene_names = split
                 if i == 0:
@@ -188,7 +206,7 @@ class SceneDataset(Dataset):
                 if gt_scenes_info_path and i == 0:
                     # set_trace()
                     # self.fill_chunks(gt_track_info, gt_scenes_info, max_gt_scene_size, gt=True)
-                    for _ in range(2):
+                    for _ in range(1):
                         self.fill_chunks(gt_track_info, gt_scenes_info, max_gt_scene_size, gt=True, augment=True)
 
                 if sample_ratio:
@@ -198,15 +216,15 @@ class SceneDataset(Dataset):
             if sample_ratio:
                 torch.save(chunk_split[0], scenes_info_path.replace('scene2trackname.json', 'train_chunks.pt'))
                 torch.save(chunk_split[1], scenes_info_path.replace('scene2trackname.json', 'val_chunks.pt'))
-                print(f"Saved validation chunk for loading to {scenes_info_path.replace('scene2trackname.json', 'val_chunks.pt')}")
-                print("Set current chunks to train chunks.")
+                logging.info(f"Saved validation chunk for loading to {scenes_info_path.replace('scene2trackname.json', 'val_chunks.pt')}")
+                logging.info("Set current chunks to train chunks.")
                 self.chunks = chunk_split[0]
             else:
                 torch.save(self.chunks, scenes_info_path.replace('scene2trackname.json', 'inference_chunks.pt'))
 
     def fill_chunks(self, track_info, scenes_info, max_scene_size, gt=False, augment=False):
         self.scenes = {k: [] for k in self.scene_names}
-        print(f"Number of non dummy items in track_info is {len([v for values in track_info.values() for v in values if v['TP'] != -500])}")
+        logging.info(f"Number of non dummy items in track_info is {len([v for values in track_info.values() for v in values if v['TP'] != -500])}")
 
         for name in self.scene_names:
             track_names = scenes_info[name]
@@ -219,8 +237,8 @@ class SceneDataset(Dataset):
                for _ in range(track_len_diff):
                    self.scenes[name].append(dummy_track)
         
-        print(f"Number of non dummy items in self.scenes is {len([v for values in self.scenes.values() for k in values for v in k if v['TP'] != -500])}")
-        print('Filling Chunks')
+        logging.info(f"Number of non dummy items in self.scenes is {len([v for values in self.scenes.values() for k in values for v in k if v['TP'] != -500])}")
+        logging.info('Filling Chunks')
         for name in tqdm.tqdm(self.scenes.keys()):
 
             scene_data = []
@@ -256,7 +274,7 @@ class SceneDataset(Dataset):
 
                 self.chunks.append(self._collate_scene(chunk, gt=gt))
 
-        print(f"Number of non dummy items in chunks is {len([v for values in self.chunks for v in values[1][1] if v != 'dummy'])}")
+        logging.info(f"Number of non dummy items in chunks is {len([v for values in self.chunks for v in values[1][1] if v != 'dummy'])}")
 
     def _collate_scene(self, scene_data, gt=False):
         """
@@ -268,7 +286,7 @@ class SceneDataset(Dataset):
         sizes = torch.tensor([d['size'] for d in scene_data], dtype=torch.float32)
         rotations = torch.tensor([d['rotation'] for d in scene_data], dtype=torch.float32)
         tp = torch.tensor([d['TP'] for d in scene_data], dtype=torch.float32)
-        num_lidar_pts = torch.tensor([d['num_lidar_pts'] for d in scene_data], dtype=torch.float32)
+        num_lidar_pts = torch.tensor([d['num_lidar_pts'] if 'num_lidar_pts' in d.keys() else 0 for d in scene_data], dtype=torch.float32)
         tokens = [d['sample_token'] for d in scene_data]
         if not self.inference:
             dist_tps = torch.tensor([d['dist_TP'] for d in scene_data], dtype=torch.float32)

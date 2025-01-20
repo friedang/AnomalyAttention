@@ -21,8 +21,8 @@ from nuscenes.eval.common.data_classes import EvalBoxes
 from nuscenes.eval.common.utils import boxes_to_sensor
 
 # Set CUDA device to GPU 0
-if torch.cuda.is_available():
-    cp.cuda.Device(0).use()
+# if torch.cuda.is_available():
+#     cp.cuda.Device(0).use()
 
 
 class NpEncoder(json.JSONEncoder):
@@ -167,7 +167,8 @@ def create_tracks(detection_results, nusc, num_lidar_pts=False, sub_path='train'
             if t_id not in tracks.keys():
                 tracks[t_id] = []
 
-            if num_lidar_pts:
+            # "EXCLUDING CAR AND PEDESTRIAN"
+            if num_lidar_pts and 'car' not in t_id and 'ped' not in t_id:
                 if sample_token not in pointcloud_cache:
                     if sample:
                         pointcloud_path = Path(f"/workspace/CenterPoint/work_dirs/PCs_npy_vox/{sub_path}") / f"{sample_token}.npy"
@@ -445,14 +446,14 @@ def main():
     # Load the JSON file
     hz20 = False
 
-    sample = None # 5, 10
+    sample = None # 5 seed # 10 seed
     gt = False
     extract_pcs = False
-    val = True
+    val = False
     remove_non_cp = False
     remove_det_by_track_len = False
     # TODO ALWAYS USE results_tp
-    immo_results = '/workspace/CenterPoint/work_dirs/immo/results/results_tp.json' #'/workspace/CenterPoint/work_dirs/Center_point_original_nusc_0075_flip/immo_results/results_tp.json' # './work_dirs/ad_mlp_05/aug_t5/nusc_validation_t01/inference_results.json' # '/workspace/CenterPoint/work_dirs/immo/cp_valset/cp_results.json'
+    immo_results = '/workspace/CenterPoint/work_dirs/immo/cp_10_pseudo_org01/results_tp.json' #'/workspace/CenterPoint/work_dirs/Center_point_original_nusc_0075_flip/immo_results/results_tp.json' # './work_dirs/ad_mlp_05/aug_t5/nusc_validation_t01/inference_results.json' # '/workspace/CenterPoint/work_dirs/immo/cp_valset/cp_results.json'
     cp_det_file = "/workspace/CenterPoint/work_dirs/5_nusc_centerpoint_voxelnet_0075voxel_fix_bn_z/eval_on_seed/2Hz/baseline_SCs_03Mean/infos_train_10sweeps_withvelo_filter_True.json"
 
     # for 20 Hz

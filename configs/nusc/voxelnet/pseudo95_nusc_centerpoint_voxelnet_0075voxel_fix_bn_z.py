@@ -164,12 +164,12 @@ test_pipeline = [
 ]
 
 project_name="cp_5seed_95pseudo_sc03"
-train_anno = "work_dirs/5_nusc_centerpoint_voxelnet_0075voxel_fix_bn_z/seed_and_pseudo_gt.pkl" # "data/nuScenes/infos_train_10sweeps_withvelo_filter_True.pkl"
+train_anno = "work_dirs/5_nusc_centerpoint_voxelnet_0075voxel_fix_bn_z/seed_and_pseudoAD_gt.pkl" # "data/nuScenes/infos_train_10sweeps_withvelo_filter_True.pkl"
 val_anno = "data/nuScenes/infos_val_10sweeps_withvelo_filter_True.pkl"
 test_anno = None
 
 data = dict(
-    samples_per_gpu=24,
+    samples_per_gpu=23,
     workers_per_gpu=2,
     train=dict(
         type=dataset_type,
@@ -231,9 +231,9 @@ evaluation = dict(interval=5)
 device_ids = range(2)
 dist_params = dict(backend="nccl", init_method="env://")
 log_level = "INFO"
-work_dir = './work_dirs/{}/'.format(__file__[__file__.rfind('/') + 1:-3])
+work_dir = './work_dirs/AD_{}/'.format(__file__[__file__.rfind('/') + 1:-3])
 load_from = None # './work_dirs/5_nusc_centerpoint_voxelnet_0075voxel_fix_bn_z/latest.pth'
-resume_from = '/workspace/CenterPoint/work_dirs/pseudo95_nusc_centerpoint_voxelnet_0075voxel_fix_bn_z/epoch_7.pth' 
+resume_from = '/workspace/CenterPoint/work_dirs/AD_pseudo95_nusc_centerpoint_voxelnet_0075voxel_fix_bn_z/epoch_17.pth' 
 workflow = [('train', 1)]
 
 import os
@@ -243,5 +243,5 @@ config_file = __file__
 destination_file = os.path.join(work_dir, os.path.basename(config_file))
 if not os.path.isdir(work_dir):
     os.mkdir(work_dir)
-if not os.path.exists(destination_file):
+if not os.path.exists(destination_file):    
     shutil.copy(config_file, destination_file)

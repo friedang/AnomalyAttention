@@ -169,9 +169,9 @@ val_anno = "data/nuScenes/infos_val_10sweeps_withvelo_filter_True.pkl"
 # pseudo_anno = "/workspace/CenterPoint/work_dirs/10_nusc_centerpoint_voxelnet_0075voxel_fix_bn_z/gt_for_pseudo.pkl"
 test_anno = None
 sample_ratio=1
-load_indices= None # '/workspace/CenterPoint/work_dirs/5_nusc_centerpoint_voxelnet_0075voxel_fix_bn_z/train_indices.pth'
+load_indices='/workspace/CenterPoint/work_dirs/10_nusc_centerpoint_voxelnet_0075voxel_fix_bn_z/train_indices.pth'
 pseudo_indices='/workspace/CenterPoint/work_dirs/5_nusc_centerpoint_voxelnet_0075voxel_fix_bn_z/pseudo_indices.pth'
-work_dir ='./work_dirs/5_{}/'.format(__file__[__file__.rfind('/') + 1:-3])
+work_dir ='./work_dirs/10_{}/eval_on_seed/'.format(__file__[__file__.rfind('/') + 1:-3])
 
 data = dict(
     samples_per_gpu=14,
@@ -188,29 +188,30 @@ data = dict(
         load_indices=load_indices,
         sample_ratio=sample_ratio,
     ),
-    # val=dict(
-    #     type=dataset_type,
-    #     root_path=data_root,
-    #     info_path=val_anno,
-    #     test_mode=True,
-    #     ann_file=val_anno,
-    #     nsweeps=nsweeps,
-    #     class_names=class_names,
-    #     pipeline=test_pipeline,
-    # ),
-    # pseudo/train val
     val=dict(
         type=dataset_type,
         root_path=data_root,
         info_path=train_anno,
-        ann_file=train_anno,
         test_mode=True,
+        ann_file=train_anno,
         nsweeps=nsweeps,
         class_names=class_names,
         pipeline=test_pipeline,
-        load_indices=load_indices,
-        sample_ratio=sample_ratio,
+        load_indices=load_indices
     ),
+    # pseudo/train val
+    # val=dict(
+    #     type=dataset_type,
+    #     root_path=data_root,
+    #     info_path=train_anno,
+    #     ann_file=train_anno,
+    #     test_mode=True,
+    #     nsweeps=nsweeps,
+    #     class_names=class_names,
+    #     pipeline=test_pipeline,
+    #     load_indices=load_indices,
+    #     sample_ratio=sample_ratio,
+    # ),
     test=dict(
         type=dataset_type,
         root_path=data_root,

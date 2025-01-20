@@ -97,7 +97,8 @@ def visualize_sample(nusc: NuScenes,
         print('Rendering sample token %s' % sample_token)
     plt.title(sample_token)
     if savepath is not None:
-        plt.savefig(savepath)
+        plt.savefig(savepath, bbox_inches='tight', dpi=300)
+        plt.savefig(savepath.replace('png', 'eps'), bbox_inches='tight', format='eps', dpi=300)
         plt.close()
     else:
         plt.show()

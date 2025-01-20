@@ -237,7 +237,7 @@ def train(rank, world_size, args):
 
     logging.info(f"Training on {len(train_dataset)} samples - Validation on {len(val_dataset)} samples.")
 
-    label_arrays = [tp[0][tp[0] != -500].cpu().numpy() for tp in train_dataset.chunks]
+    label_arrays = [tp[0][tp[0] != -500].cpu().numpy() for tp in train_dataset.chunks if tp[0][tp[0] != -500].nelement() != 0]
     
     # creating class weights
     logging.info('FOR TRAINING')
@@ -252,7 +252,7 @@ def train(rank, world_size, args):
     # class_weights = [class_weights[1], class_weights[0]]
 
     logging.info('FOR VALIDATION')
-    label_arrays = [tp[0][tp[0] != -500].cpu().numpy() for tp in val_dataset.chunks]
+    label_arrays = [tp[0][tp[0] != -500].cpu().numpy() for tp in val_dataset.chunks if tp[0][tp[0] != -500].nelement() != 0]
     data = []
     for l in label_arrays:
         data.extend(l)
@@ -271,7 +271,7 @@ def train(rank, world_size, args):
 
     # Loaders
     train_loader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=False, sampler=train_sampler)
-    val_loader = DataLoader(val_dataset, batch_size=args.batch_size, sampler=val_sampler)
+    val_loader = DataLoader(val_dataset, batch_size=args.batch_size, shuffle=False, sampler=val_sampler)
 
     # Instantiate the model and move to device
     if args.track_pc:
@@ -280,11 +280,11 @@ def train(rank, world_size, args):
         model = PCTrackMLPClassifier() # input_size=12, hidden_size=128, num_layers=3)
     elif args.voxel:
         model = VoxelTrackMLPClassifier(
-        hidden_size=512,
-        num_layers=6,
-        num_heads=16,
-        mlp_feature_dim=512
-    ) # (input_size=12, hidden_size=128, num_layers=3)
+            hidden_size=256,
+            num_layers=6,
+            num_heads=8,
+            mlp_feature_dim=256
+            ) # (input_size=12, hidden_size=128, num_layers=3)
     else:
         model = TrackMLPClassifier() # (input_size=12, hidden_size=128, num_layers=3)
 
@@ -297,7 +297,7 @@ def train(rank, world_size, args):
 
     # Set up optimizer
     optimizer = optim.Adam(model.parameters(), lr=args.lr) # , weight_decay=0.01)
-    # scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=10, gamma=0.5)
+    # optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=0.0003)
 
     # Option to resume from checkpoint
     if args.resume_from:
@@ -326,7 +326,7 @@ def train(rank, world_size, args):
     # moms = [0.85, 0.95]
     # div_factor = 25
     # pct_start = 0.3
-    # scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=20, gamma=0.1) # torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=300, eta_min=1e-6)
+    # scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode="min", patience=10, verbose=True) # torch.optim.lr_scheduler.StepLR(optimizer, step_size=20, gamma=0.1) # torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=300, eta_min=1e-6)
 
     # Training loop
     for epoch in range(start_epoch, args.epochs):
@@ -378,11 +378,11 @@ def train(rank, world_size, args):
                         elif num_tp == 1:
                             weights[b][n] = class_weights[1]
                         elif num_tp == 2:
-                            weights[b][n] = class_weights[1] * 2 # 1.15
+                            weights[b][n] = class_weights[1] * 1.5
                         elif num_tp == 3:
-                            weights[b][n] = class_weights[1] * 3 #1.3
+                            weights[b][n] = class_weights[1] * 2
                         else:
-                            weights[b][n] = class_weights[1] * 4 # 1.45 # * 1.25  # * num_tp
+                            weights[b][n] = class_weights[1] * 2.5 # 1.45 # * 1.25  # * num_tp
 
                 weights = weights.to(device)
                 weights = weights[mask.bool()]
@@ -403,7 +403,7 @@ def train(rank, world_size, args):
 
             running_loss += loss.item()
 
-        # scheduler.step()
+        # scheduler.step(loss)
 
         # for name, param in model.named_parameters():
         #     if param.requires_grad:
@@ -441,7 +441,7 @@ def train(rank, world_size, args):
 if __name__ == "__main__":
     "TRAINING AERGS"
     parser = argparse.ArgumentParser()
-    parser.add_argument('--epochs', type=int, default=100, help="Number of training epochs")
+    parser.add_argument('--epochs', type=int, default=300, help="Number of training epochs")
     parser.add_argument('--batch_size', type=int, default=24, help="Batch size per GPU") # 22 for non freezed
     parser.add_argument('--lr', type=float, default=1e-4, help="Learning rate")
     parser.add_argument('--world_size', type=int, default=1, help="Number of GPUs for distributed training")

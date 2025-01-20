@@ -76,7 +76,7 @@ test_cfg = dict(
         nms_post_max_size=83,
         nms_iou_threshold=0.2,
     ),
-    score_threshold=[0.3, 0.5, 0.5, 0.7, 0.6, 0.6, 0.6, 0.6, 0.6, 0.6], # 0.1,
+    score_threshold=0.1,#[0.3, 0.5, 0.5, 0.7, 0.6, 0.6, 0.6, 0.6, 0.6, 0.6], # 0.1,
     pc_range=[-54, -54],
     out_size_factor=get_downsample_factor(model),
     voxel_size=[0.075, 0.075]
@@ -167,7 +167,7 @@ project_name="cp_5seed"
 train_anno = "data/nuScenes/infos_train_10sweeps_withvelo_filter_True.pkl"
 val_anno = "data/nuScenes/infos_val_10sweeps_withvelo_filter_True.pkl"
 # pseudo_anno = "/workspace/CenterPoint/work_dirs/10_nusc_centerpoint_voxelnet_0075voxel_fix_bn_z/gt_for_pseudo.pkl"
-test_anno = None
+test_anno = "data/nuScenes/infos_test_10sweeps_withvelo.pkl"
 sample_ratio=1
 load_indices= None # '/workspace/CenterPoint/work_dirs/5_nusc_centerpoint_voxelnet_0075voxel_fix_bn_z/train_indices.pth'
 pseudo_indices='/workspace/CenterPoint/work_dirs/5_nusc_centerpoint_voxelnet_0075voxel_fix_bn_z/pseudo_indices.pth'
@@ -214,14 +214,14 @@ data = dict(
     test=dict(
         type=dataset_type,
         root_path=data_root,
-        info_path=train_anno,
-        ann_file=train_anno,
+        info_path=test_anno,
+        ann_file=test_anno,
         test_mode=True,
         nsweeps=nsweeps,
         class_names=class_names,
         pipeline=test_pipeline,
-        load_indices=pseudo_indices, # load_indices,
-        sample_ratio=sample_ratio,
+        load_indices=None, # pseudo_indices, # load_indices,
+        sample_ratio=1, #sample_ratio,
         hz20=False,
     ),
 )

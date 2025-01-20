@@ -2,6 +2,7 @@ import os
 
 import pickle as pkl
 import numpy as np
+import torch
 import tqdm
 from pyquaternion import Quaternion
 
@@ -86,7 +87,7 @@ def update_data(data_path, updates_path):
         'motorcycle', 'bicycle', 'pedestrian', 'traffic_cone'
     ]
     for frame in tqdm.tqdm(data):
-        if frame['token'] not in update_tokens:
+        if frame['token'] not in update_tokens or updates[frame['token']]['label_preds'].nelement() == 0:
             continue
         ups = updates[frame['token']]
         frame['gt_boxes'] = ups['box3d_lidar'].detach().cpu().numpy()
@@ -205,8 +206,91 @@ def merge_2hz_and_20hz_files(keyframe_file, non_keyframe_file, output_file):
     print(f'Merged results saved to {output_file}')
 
 
+def _global_nusc_box_to_lidar(nusc, boxes, sample_token):
+    """Reverse the global box transformation to LiDAR coordinates."""
+    try:
+        s_record = nusc.get("sample", sample_token)
+        sample_data_token = s_record["data"]["LIDAR_TOP"]
+    except:
+        sample_data_token = sample_token
+
+    sd_record = nusc.get("sample_data", sample_data_token)
+    cs_record = nusc.get("calibrated_sensor", sd_record["calibrated_sensor_token"])
+    pose_record = nusc.get("ego_pose", sd_record["ego_pose_token"])
+
+    box_list = []
+    for box in boxes:
+        # Undo global to ego vehicle coord system
+        box.translate(-np.array(pose_record["translation"]))
+        box.rotate(Quaternion(pose_record["rotation"]).inverse)
+        # Undo ego vehicle to LiDAR coord system
+        box.translate(-np.array(cs_record["translation"]))
+        box.rotate(Quaternion(cs_record["rotation"]).inverse)
+        box_list.append(box)
+    return box_list
+
+
+def json_to_dets(nusc, json_file, output_pickle):
+    """Load JSON predictions and reverse transform to pickle format."""
+    with open(json_file, "r") as f:
+        nusc_annos = json.load(f)
+    
+    dets = {}
+
+    detection_names = ['car','bus','trailer','truck','pedestrian','bicycle',
+                        'motorcycle','construction_vehicle', 'barrier', 'traffic_cone']
+    name_dict = {n: i for n, i in zip(detection_names, range(len(detection_names)))}
+
+    for token, annos in nusc_annos["results"].items():
+        if token not in dets.keys():
+            dets.update({token: {"metadata": {"token": token}}})
+        boxes = []
+        # scores = []
+        labels = []
+        for anno in annos:
+            box = Box(
+                center=np.array(anno["translation"]),
+                size=np.array(anno["size"]),
+                orientation=Quaternion(anno["rotation"]),
+                label=name_dict[anno["detection_name"][0] if isinstance(anno["detection_name"], list) else anno["detection_name"]],  # Adjust mapping if necessary
+                score=anno["detection_score"],
+                velocity=(*anno["velocity"], 0.0)
+            )
+            boxes.append(box)
+            # scores.append(anno["detection_score"])
+            labels.append(name_dict[anno["detection_name"][0] if isinstance(anno["detection_name"], list) else anno["detection_name"]])  # Map to numeric label if required
+        
+        boxes = _global_nusc_box_to_lidar(nusc, boxes, token)
+        
+        # Convert boxes back to tensors
+        box3d_lidar = []
+        for box in boxes:
+            yaw = -box.orientation.yaw_pitch_roll[0] - np.pi / 2
+            box3d_lidar.append([
+                *box.center, *box.wlh, yaw, box.velocity[0], box.velocity[1]
+            ])
+        
+        # det = {
+        #     "metadata": {"token": token},
+        #     "box3d_lidar": np.array(box3d_lidar),
+        #     "scores": np.array(scores),
+        #     "label_preds": np.array(labels)  # Map back to numeric labels
+        # }
+        if 'box3d_lidar' not in dets[token].keys():
+            dets[token]['box3d_lidar'] = torch.tensor(box3d_lidar)
+            dets[token]['label_preds'] = torch.tensor(labels)
+        else:
+            dets[token]['box3d_lidar'] = torch.vstack(dets[token]['box3d_lidar'], np.array(box3d_lidar))
+            dets[token]['label_preds'] = torch.hstack(dets[token]['label_preds'], labels)
+    
+    with open(output_pickle, "wb") as f:
+        pkl.dump(dets, f)
+    
+    print(f"Saved detections to {output_pickle}")
+
+
 # List of pickle files to merge
-pickle_files = ['./data/nuScenes/infos_train_10sweeps_withvelo_filter_True.pkl', '/workspace/CenterPoint/work_dirs/5_nusc_centerpoint_voxelnet_0075voxel_fix_bn_z/prediction_1.pkl']
+pickle_files = ['./data/nuScenes/infos_train_10sweeps_withvelo_filter_True.pkl', '/workspace/CenterPoint/work_dirs/ad_pc_mlp_05/seed10_voxel_at_org01th_c42_exCarPed/cp_10_pseudo_bal_ad/inference_merged_results.pkl'] # '/workspace/CenterPoint/work_dirs/5_nusc_centerpoint_voxelnet_0075voxel_fix_bn_z/prediction_1.pkl']
 
 # Directory to save the merged file
 output_dir = pickle_files[1].replace('prediction_1.pkl', '')
@@ -223,20 +307,34 @@ with launch_ipdb_on_exception():
     import argparse
     parser = argparse.ArgumentParser()
     parser.add_argument('--res_path', type=str, default=None)
+    parser.add_argument('--cp_det_path', type=str, default=None)
+    parser.add_argument('--tracking_to_detection', type=str, default=None)
     args = parser.parse_args()
-    if not args.res_path:
-        tracking_to_detection('/workspace/CenterPoint/work_dirs/immo/results/results.json') #inference_results
+
+    if not args.res_path and not args.tracking_to_detection:
+        nusc = NuScenes(version='v1.0-trainval', dataroot="data/nuScenes", verbose=True)
+        json_file = './work_dirs/ad_pc_mlp_05/seed10_voxel_at_org01th_c42_exCarPed/cp_10_pseudo_bal_ad/inference_merged_results.json'
+        output_pickle = json_file.replace('json', 'pkl')
+        json_to_dets(nusc, json_file, output_pickle)
+
+        # merge seed and pseudo
+        data = update_data(pickle_files[0], pickle_files[1])
+        output_file_path = "/workspace/CenterPoint/work_dirs/10_nusc_centerpoint_voxelnet_0075voxel_fix_bn_z/seed_and_pseudoAD_gt.pkl"
+        with open(output_file_path, 'wb') as file:
+            pkl.dump(data, file)
+
+    if args.tracking_to_detection:
+        tracking_to_detection(args.tracking_to_detection) #inference_results
     
     # Add tracking_name from detection_name
     # detection_to_tracking("/workspace/CenterPoint/work_dirs/immo/results/results.json")
     # merge_2hz_and_20hz_files(keyframe_json_path, non_keyframe_json_path, output_json_path)
 
     if args.res_path:
-        update_results(cp_det_path='/workspace/CenterPoint/work_dirs/immo/cp_valset/cp_results.json', 
+        update_results(cp_det_path=args.cp_det_path, 
                        results_path=args.res_path)
                                 # args.res_path
-    ## merge seed and pseudo
-    # data = update_data(pickle_files[0], pickle_files[1])
+
 
     ## extract pseudo gt for evaluation/validation
     # # output_file_path = os.path.join(output_dir, 'gt_for_pseudo.pkl')
