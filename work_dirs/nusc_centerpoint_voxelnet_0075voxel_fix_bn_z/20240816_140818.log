@@ -1,2 +1,0 @@
-2024-08-16 14:08:18,822 - INFO - Start running, host: vscode@fba70968c86f, work_dir: /workspace/CenterPoint/work_dirs/nusc_centerpoint_voxelnet_0075voxel_fix_bn_z
-2024-08-16 14:08:18,822 - INFO - workflow: [('train', 1)], max: 20 epochs
