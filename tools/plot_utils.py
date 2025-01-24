@@ -16,8 +16,8 @@ def plot_pr_confidence(precision, recall, thresholds, workdir, name):
     plt.figure()
     PrecisionRecallDisplay(precision=precision, recall=recall).plot()
     plt.title(f"Precision-Recall Curve {name}")
-    plt.savefig(os.path.join(workdir, f"precision_recall_curve_{name}.png"), bbox_inches='tight', format='png', dpi=300)
-    plt.savefig(os.path.join(workdir, f"precision_recall_curve_{name}.eps"), bbox_inches='tight', format='eps', dpi=300)
+    plt.savefig(os.path.join(workdir, f"precision_recall_curve_{name}.png"), bbox_inches='tight', format='png', dpi=150, metadata=None,)
+    plt.savefig(os.path.join(workdir, f"precision_recall_curve_{name}.eps"), bbox_inches='tight', format='eps', dpi=150, metadata=None,)
 
     # Precision-Confidence plot
     plt.figure()
@@ -25,8 +25,8 @@ def plot_pr_confidence(precision, recall, thresholds, workdir, name):
     plt.xlabel("Confidence Threshold")
     plt.ylabel("Precision")
     plt.title(f"Precision vs. Confidence {name}")
-    plt.savefig(os.path.join(workdir, f"precision_confidence_curve_{name}.png"), bbox_inches='tight', format='png', dpi=300)
-    plt.savefig(os.path.join(workdir, f"precision_confidence_curve_{name}.eps"), bbox_inches='tight', format='eps', dpi=300)
+    plt.savefig(os.path.join(workdir, f"precision_confidence_curve_{name}.png"), bbox_inches='tight', format='png', dpi=150, metadata=None,)
+    plt.savefig(os.path.join(workdir, f"precision_confidence_curve_{name}.eps"), bbox_inches='tight', format='eps', dpi=150, metadata=None,)
 
     # Recall-Confidence plot
     plt.figure()
@@ -34,8 +34,8 @@ def plot_pr_confidence(precision, recall, thresholds, workdir, name):
     plt.xlabel("Confidence Threshold")
     plt.ylabel("Recall")
     plt.title(f"Recall vs. Confidence {name}")
-    plt.savefig(os.path.join(workdir, f"recall_confidence_curve_{name}.png"), bbox_inches='tight', format='png', dpi=300)
-    plt.savefig(os.path.join(workdir, f"recall_confidence_curve_{name}.eps"), bbox_inches='tight', format='eps', dpi=300)
+    plt.savefig(os.path.join(workdir, f"recall_confidence_curve_{name}.png"), bbox_inches='tight', format='png', dpi=150, metadata=None,)
+    plt.savefig(os.path.join(workdir, f"recall_confidence_curve_{name}.eps"), bbox_inches='tight', format='eps', dpi=150, metadata=None,)
     plt.close()
 
 
@@ -66,8 +66,8 @@ def plot_confusion_matrix(y_true, y_pred, workdir, name):
                      color="white" if cm[i, j] > thresh else "black")
 
     # Save the confusion matrix plot
-    plt.savefig(os.path.join(workdir, f"confusion_matrix_{name}.png"), bbox_inches='tight', format='png', dpi=300)
-    plt.savefig(os.path.join(workdir, f"confusion_matrix_{name}.eps"), bbox_inches='tight', format='eps', dpi=300)
+    plt.savefig(os.path.join(workdir, f"confusion_matrix_{name}.png"), bbox_inches='tight', format='png', dpi=150, metadata=None,)
+    plt.savefig(os.path.join(workdir, f"confusion_matrix_{name}.eps"), bbox_inches='tight', format='eps', dpi=150, metadata=None,)
     plt.close()  # Close the figure after saving to avoid display in notebooks
 
 
@@ -123,8 +123,8 @@ def plot_pr():
     plt.grid(True)
     plt.xlim([0, 1])
     plt.ylim([0, 1])
-    plt.savefig(f"{detailed_results_path.replace('metrics_details.json', 'car')}.png", bbox_inches='tight', format='png', dpi=300)
-    plt.savefig(f"{detailed_results_path.replace('metrics_details.json', 'car')}.eps", bbox_inches='tight', format='eps', dpi=300)
+    plt.savefig(f"{detailed_results_path.replace('metrics_details.json', 'car')}.png", bbox_inches='tight', format='png', dpi=150, metadata=None,)
+    plt.savefig(f"{detailed_results_path.replace('metrics_details.json', 'car')}.eps", bbox_inches='tight', format='eps', dpi=150, metadata=None,)
 
 
 def track_length_bar(data=None, work_dir=None, filter=None):
@@ -158,12 +158,7 @@ def track_length_bar(data=None, work_dir=None, filter=None):
     tp_1_counts = np.zeros((max(lengths),))
     tp_0_counts = np.zeros((max(lengths),))
 
-    # Process lists of varying lengths
-    # tp_1_len_counts = []
-    # tp_0_len_counts = []
     for i, sublist in enumerate(data):
-        # tp_1_len_counts.extend([lengths[i] for _ in range(sum(entry['TP'] == 1 for entry in sublist))])
-        # tp_0_len_counts.extend([lengths[i] for _ in range(sum(entry['TP'] == 0 for entry in sublist))])
         tp_1_counts[lengths[i]-1] += sum(entry['TP'] == 1 for entry in sublist)    
         tp_0_counts[lengths[i]-1] += sum(entry['TP'] == 0 for entry in sublist)
 
@@ -206,28 +201,6 @@ def track_length_bar(data=None, work_dir=None, filter=None):
     # Update the layout
     plt.subplots_adjust(bottom=0.3)
 
-
-    # valid_patches = ax.patches[:len(correct_rate) * 2]  # Ensure we only use patches corresponding to actual bars
-
-    # for i, p in enumerate(valid_patches):
-    #     track_length_idx = i // 2  # Get the index of the track length (each track length has 2 bars)
-    #     if i % 2 == 0:  # "Correct" bar
-    #         ax.annotate(f"{label[0]}: {correct_rate[track_length_idx]:.2f}", #, {label[1]}: {false_rate[track_length_idx]:.2f}", 
-    #                     (p.get_x() + p.get_width() / 2., p.get_height()), 
-    #                     ha='center', va='center', 
-    #                     xytext=(0, 8), textcoords='offset points', 
-    #                     fontsize=12, color='black')
-
-
-    # Plot the data
-    # bar_width = 0.35
-    # Bar plots for TP=1 and TP=0 counts
-    # plt.bar(list_lengths - bar_width / 2, tp_1_counts, bar_width, label='Correct', color='g')
-    # plt.bar(list_lengths + bar_width / 2, tp_0_counts, bar_width, label='False', color='r')
-
-    # sns.histplot(tp_1_len_counts, kde=False, color='g', label='Correct', bins=42) # , alpha=0.6)
-    # sns.histplot(tp_0_len_counts, kde=False, color='r', label='False', bins=42) # , alpha=0.6)
-
     if filter:
         filter = 'Anomaly' if filter == 'anomaly' else 'Nomaly'
 
@@ -240,8 +213,8 @@ def track_length_bar(data=None, work_dir=None, filter=None):
     file_name = 'track_length_hist.png' if not filter else f"track_length_hist_{filter}"
     # Save the plot
     out = work_dir + '/' + file_name  + ".png" if work_dir else '/workspace/CenterPoint/work_dirs/' + file_name + ".png"
-    plt.savefig(out, bbox_inches='tight', format='png', dpi=300)
-    plt.savefig(out.replace('png', 'eps'), bbox_inches='tight', format='eps', dpi=300)
+    plt.savefig(out, bbox_inches='tight', format='png', dpi=150, metadata=None,)
+    plt.savefig(out.replace('png', 'eps'), bbox_inches='tight', format='eps', dpi=150, metadata=None,)
     plt.close()
 
 
@@ -271,20 +244,10 @@ def plot_ad_by_track_score(data=None, work_dir=None, filter=None):
         all_scores = data['scores']
         matches_array = (all_labels == all_predictions).astype(int)
         all_labels = matches_array # nomaly_match_length[0]
-        # anomaly_match_length = ([], [])
-        # nomaly_match_length = ([], [])
-        # for i, m in enumerate(matches_array):
-        #     if all_labels[i] == 0:
-        #         anomaly_match_length[0].append(m)
-        #         anomaly_match_length[1].append(all_scores[i])
-        #     elif all_labels[i] == 1:
-        #         nomaly_match_length[0].append(m)
-        #         nomaly_match_length[1].append(all_scores[i])
 
-        # all_labels, all_scores = anomaly_match_length  # labels are correct/false predictions in this case when it comes from test_ad.py
+
         scores_tp_0 = [s for i, s in enumerate(all_scores) if all_labels[i] == 0]
         scores_tp_1 = [s for i, s in enumerate(all_scores) if all_labels[i] == 1]
-        # filter = 'anomaly'
 
 
     num_bins = 20  # Adjust the number of bins as needed
@@ -340,8 +303,8 @@ def plot_ad_by_track_score(data=None, work_dir=None, filter=None):
     # Save the plot
     file_name = 'tracking_score_histogram.png' if not filter else f"tracking_score_histogram_{filter}.png"
     out = work_dir + '/' + file_name if work_dir else '/workspace/CenterPoint/work_dirs/' + file_name
-    plt.savefig(out, bbox_inches='tight', format='png', dpi=300)
-    plt.savefig(out.replace('png', 'eps'), bbox_inches='tight', format='eps', dpi=300)
+    plt.savefig(out, bbox_inches='tight', format='png', dpi=150, metadata=None,)
+    plt.savefig(out.replace('png', 'eps'), bbox_inches='tight', format='eps', dpi=150, metadata=None,)
     
     
     plt.close()

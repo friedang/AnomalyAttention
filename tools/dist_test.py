@@ -44,7 +44,7 @@ def parse_args():
     parser.add_argument("config", help="config file path")
     parser.add_argument("--work_dir", required=True, help="the dir to save logs and models")
     parser.add_argument(
-        "--checkpoint", help="the dir to checkpoint which the model read from"
+        "--checkpoint", default=None, help="the dir to checkpoint which the model read from"
     )
     parser.add_argument(
         "--txt_result",
@@ -238,11 +238,5 @@ if __name__ == "__main__":
     with launch_ipdb_on_exception():
         # wandb.init("cp_5seed95pseudo") # project=cfg.project_name)
         args = parse_args()
-
-        # ch = './work_dirs/5_nusc_centerpoint_voxelnet_0075voxel_fix_bn_z/epoch_1.pth'
-        # wdir = args.work_dir
-        # for e in [1]:
-        #     args.checkpoint = ch[:-500] + f"{e}.pth"
-        #     args.work_dir = wdir + f"eval_{e}"
 
         main(args)

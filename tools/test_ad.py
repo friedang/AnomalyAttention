@@ -24,22 +24,29 @@ from det3d.models.classifier.lstm import LSTMClassifier
 from det3d.models.classifier.transformer import TrackTransformerClassifier
 from det3d.models.classifier.pc_mlp import PCTrackMLPClassifier
 from det3d.models.classifier.track2pc_mlp import Track2PCTrackMLPClassifier
-from det3d.models.classifier.voxel_at import VoxelTrackMLPClassifier
+from det3d.models.classifier.anomaly_attention import AnomalyAttention
+from det3d.models.classifier.voxel_mlp import VoxelTrackMLPClassifier
 
 
 # Define sigmoid function for converting logits to probabilities
 sigmoid = nn.Sigmoid()
+
+LENGTH_THRESH=10
+
+# total seed
+SCORE_THRESH=0.2
+CLASS_CONF_THRESH = {'car': 0,'bus': 0.5,'trailer': 0.5,'truck': 0.3,'pedestrian': 0,'bicycle': 0.4,
+                     'motorcycle': 0.3,'construction_vehicle': 0.5, 'barrier': 0.3, 'traffic_cone': 0.01}
+
+# seed 5
+# SCORE_THRESH=0.5
+# LENGTH_THRESH=10 total seed # > 10 seed10
+# CLASS_CONF_THRESH = {'car': 0, 'bus': 0.4, 'trailer': 0.3, 'truck': 0.4, 'pedestrian': 0, 'bicycle': 0.4,
+#                      'motorcycle': 0.4, 'construction_vehicle': 0.3, 'barrier': 0.1, 'traffic_cone': 0.01}
+
 # seed 10
 # CLASS_CONF_THRESH = {'car': 0,'bus': 0.3,'trailer': 0.3,'truck': 0.3,'pedestrian': 0,'bicycle': 0.5,
 #                      'motorcycle': 0.4,'construction_vehicle': 0.4, 'barrier': 0.1, 'traffic_cone': 0.1}
-
-# total seed
-# CLASS_CONF_THRESH = {'car': 0,'bus': 0.5,'trailer': 0.5,'truck': 0.3,'pedestrian': 0,'bicycle': 0.4,
-#                      'motorcycle': 0.3,'construction_vehicle': 0.5, 'barrier': 0.3, 'traffic_cone': 0.01}
-
-#seed 5
-CLASS_CONF_THRESH = {'car': 0, 'bus': 0.4, 'trailer': 0.3, 'truck': 0.4, 'pedestrian': 0, 'bicycle': 0.4,
-                     'motorcycle': 0.4, 'construction_vehicle': 0.3, 'barrier': 0.1, 'traffic_cone': 0.01}
 
 def log_model_info(model):
     # Log the model architecture
@@ -83,7 +90,6 @@ def inference(model, dataloader, device, threshold, workdir, val=False, args=Non
                 pc_batch = torch.tensor(np.stack(pc_batch, axis=0)).float().to(device)
                 inputs = (inputs, pc_batch)
 
-            # set_trace()
             if not any([[t for t in detection_ids if 'car' in t or 'ped' in t]]):
                 outputs = model(inputs)
                 confidences = sigmoid(outputs).squeeze(2).permute(1, 0).cpu().numpy()
@@ -91,7 +97,6 @@ def inference(model, dataloader, device, threshold, workdir, val=False, args=Non
                 if not threshold:
                     detection_names = [meta['detection_name'][0] for meta in scene_data if meta['detection_name'][0] != 'dummy']
                     predicted_labels = (confidences >= CLASS_CONF_THRESH[detection_names[0]]).astype(int) 
-                    # set_trace()
                 else:
                     predicted_labels = (confidences >= float(threshold)).astype(int)
             else:
@@ -103,28 +108,22 @@ def inference(model, dataloader, device, threshold, workdir, val=False, args=Non
 
             # Filter out 'dummy' tokens or 'dummy' ids
             for i, (t, det_id, conf, pred, meta_data) in enumerate(zip(tokens, detection_ids, confidences, predicted_labels, scene_data)):
-                # set_trace()
+                
                 if 'dummy' not in det_id and not 'gt' in det_id:  # Filter based on TP and id
-                    # set_trace()
-                    # Convert token and detection_id to string for JSON compatibility
                     key = t if isinstance(t, str) else t[0]
                     if key not in output_dict.keys():
                         output_dict[key] = []
-
-                    # if int(pred) == 0:
-                    #     print("Found Anomaly")
-                    #     set_trace()
 
                     output = {"confidence": float(conf), "TP": int(pred),
                                 "id": det_id, "tracking_id": det_id.replace(key, '').replace('_', ''),
                                 "sample_token": key, "track_length": length}
                     
-                    if length > 10 and length <= 36: # TODO add arg  # length > 10 and length <= 36 seed5  # length > 10 total seed # > 10 seed10
+                    if length > LENGTH_THRESH: # TODO add arg  # length > 10 and length <= 36 seed5  # length > 10 total seed # > 10 seed10
                         output['TP'] = 1
 
                     if isinstance(meta_data, dict):
                         output.update({k: v for k, v in meta_data.items() if k not in output.keys()})
-                        if output['tracking_score'] > 0.5: # TODO add arg                  # 0.5 for seed5 # 0.2 for total seed # 0.4 seed10
+                        if output['tracking_score'] > SCORE_THRESH: # TODO add arg                  # 0.5 for seed5 # 0.2 for total seed # 0.4 seed10
                             output['TP'] = 1
                         if 'car' in output['detection_name'] or 'ped' in output['detection_name']:
                             output['TP'] = 1
@@ -141,8 +140,6 @@ def inference(model, dataloader, device, threshold, workdir, val=False, args=Non
                         all_class_names.append(output['detection_name'])
                     valid_idx[0, i, 0] = 1
 
-            # Collect true labels if in validation mode
-            # if validate:
             # Filter out -500 (padding) labels
             valid_tp = tp[valid_idx == 1].cpu().numpy()
             all_labels.extend(valid_tp)
@@ -153,10 +150,7 @@ def inference(model, dataloader, device, threshold, workdir, val=False, args=Non
         logging.info(f"Number of TP is {len([v for values in output_dict.values() for v in values if v['TP'] == 1])}")
         logging.info(f"Number of Dets detected as AD/FP is {fp}")
         if fp == 0:
-            logging.info(f"No anomalies were detected for the threshold {threshold}")
-            # set_trace()
-            # return
-    
+            logging.info(f"No anomalies were detected for the threshold {threshold}")    
 
     save_json(output_dict, os.path.join(workdir, 'inference_results.json'), cls=NpEncoder)
 
@@ -173,9 +167,9 @@ def inference(model, dataloader, device, threshold, workdir, val=False, args=Non
         if not os.path.isdir(plot_dir):
             os.mkdir(plot_dir)
         
-        # save_json(plot_data, os.path.join(plot_dir, 'data_for_plots.json'), cls=NpEncoder)
+        save_json(plot_data, os.path.join(plot_dir, 'data_for_plots.json'), cls=NpEncoder)
 
-        plot_data = load_json(os.path.join(plot_dir, 'data_for_plots.json'))
+        # plot_data = load_json(os.path.join(plot_dir, 'data_for_plots.json'))
         all_labels = plot_data['gt_labels']
         all_predictions = plot_data['predictions']
         all_track_scores = plot_data['scores']
@@ -301,7 +295,7 @@ def test(rank, world_size, args):
     num_0 = len([i for i in data if i == 0])
     logging.info(f"# FP samples: {num_0} - # TP samples: {num_1}")
 
-    # set_trace()
+    
 
     if world_size > 1:
         sampler = DistributedSampler(dataset, num_replicas=world_size, rank=rank)
@@ -314,16 +308,18 @@ def test(rank, world_size, args):
     if args.track_pc:
         model = Track2PCTrackMLPClassifier(input_size=12, hidden_size=128, num_layers=3)
     elif args.pc:
-        model = PCTrackMLPClassifier() # (input_size=12, hidden_size=128, num_layers=3)
+        model = PCTrackMLPClassifier()
     elif args.voxel:
-            model = VoxelTrackMLPClassifier(
-            hidden_size=256,
-            num_layers=6,
-            num_heads=8,
-            mlp_feature_dim=256
-            ) # (input_size=12, hidden_size=128, num_layers=3)
+            model = VoxelTrackMLPClassifier(input_size=12, hidden_size=128, num_layers=3)
+    elif args.attention:
+            model = AnomalyAttention(
+                hidden_size=256,
+                num_layers=6,
+                num_heads=8,
+                mlp_feature_dim=256
+            )
     else:
-        model = TrackMLPClassifier() # (input_size=12, hidden_size=128, num_layers=3)
+        model = TrackMLPClassifier()
 
     model.load_state_dict(torch.load(args.model_checkpoint, map_location=device)['model_state_dict'], strict=False)
     log_model_info(model)
@@ -370,8 +366,9 @@ if __name__ == "__main__":
     parser.add_argument('--val', action="store_true", help="Run evaluation with validation labels")
     parser.add_argument('--cpu', action="store_true", help="Use CPU for inference")
     parser.add_argument('--world_size', type=int, default=1, help="Number of GPUs for distributed inference")
-    parser.add_argument('--pc', action="store_true", help="Use point clouds")
-    parser.add_argument('--voxel', action="store_true", help="Use point clouds")
+    parser.add_argument('--attention', action="store_true", help="Use AnomalyAttention")
+    parser.add_argument('--pc', action="store_true", help="Use PointNet")
+    parser.add_argument('--voxel', action="store_true", help="Use VoxelNet")
     parser.add_argument('--track_pc', action="store_true", help="Use point clouds")
     parser.add_argument('--run_name', type=str, default='', help="wandb run name")
     parser.add_argument("--local-rank", type=int, default=0)

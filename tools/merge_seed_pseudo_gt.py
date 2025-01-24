@@ -40,9 +40,6 @@ def tracking_to_detection(track_path):
     
     data['results'] = results
 
-    # base_data = json.load(open('/workspace/CenterPoint/work_dirs/5_nusc_centerpoint_voxelnet_0075voxel_fix_bn_z/eval_on_seed/infos_train_10sweeps_withvelo_filter_True.json', 'r'))
-    # data['results'] = {k: v for k,v in data['results'].items() if k in base_data['results']}
-
     with open(track_path.replace('tracking_result', 'track_to_det_results'), "w") as f:
         json.dump(data, f)
 
@@ -63,9 +60,6 @@ def detection_to_tracking(track_path):
     
     data['results'] = results
 
-    # base_data = json.load(open('/workspace/CenterPoint/work_dirs/5_nusc_centerpoint_voxelnet_0075voxel_fix_bn_z/eval_on_seed/infos_train_10sweeps_withvelo_filter_True.json', 'r'))
-    # data['results'] = {k: v for k,v in data['results'].items() if k in base_data['results']}
-
     with open(track_path.replace('tracking_result', 'track_to_det_results'), "w") as f:
         json.dump(data, f)
 
@@ -76,9 +70,6 @@ def update_data(data_path, updates_path):
     
     with open(updates_path, "rb") as f:
         updates = pkl.load(f)
-
-    # gts, _ = load_gt(nusc, "detection_cvpr_2019", DetectionBox, verbose=True)
-    # preds, meta = load_prediction(updates_path, max_boxes_per_sample=500, box_cls=DetectionBox, verbose=True)
     
     counter = 0
     update_tokens = list(updates.keys())
@@ -115,30 +106,11 @@ def update_results(cp_det_path, results_path):
 
     print(f"Number of Detections before filtering is {len([v for values in res.values() for v in values])}") # if v['TP'] == 1])}")
     counter = 0
-    # for k, v in res.items():
-    #     if v == []:
-    #         print("Add original result")
-    #         res[k] = data['results'][k]
-    #         continue
-        # if v != []:
-        #     data['results'][k] = v
-            
-        # filter AD
-        # vals = []
-        # fp = []
-        # for val in v:
-        #     if val['TP'] == 1:
-        #         vals.append(val)
-        #     else:
-        #         fp.append(val)
-        
-        # counter += len(fp)
-        # res[k] = vals    
     
     print(f"Filtered out {counter} Detections labeled as FP")
     print(f"Number of Detections after filtering is {len([v for values in res.values() for v in values])}")
 
-    # set_trace()
+    
     for k in data['results'].keys():
         if k not in res.keys() or res[k] == []:
             res[k] = data['results'][k]
@@ -159,9 +131,6 @@ def extract_pseudo_gt(data_path, updates_path):
     
     with open(updates_path, "rb") as f:
         updates = pkl.load(f)
-
-    # gts, _ = load_gt(nusc, "detection_cvpr_2019", DetectionBox, verbose=True)
-    # preds, meta = load_prediction(updates_path, max_boxes_per_sample=500, box_cls=DetectionBox, verbose=True)
     
     counter = 0
     update_tokens = list(updates.keys())
@@ -269,13 +238,7 @@ def json_to_dets(nusc, json_file, output_pickle):
             box3d_lidar.append([
                 *box.center, *box.wlh, yaw, box.velocity[0], box.velocity[1]
             ])
-        
-        # det = {
-        #     "metadata": {"token": token},
-        #     "box3d_lidar": np.array(box3d_lidar),
-        #     "scores": np.array(scores),
-        #     "label_preds": np.array(labels)  # Map back to numeric labels
-        # }
+
         if 'box3d_lidar' not in dets[token].keys():
             dets[token]['box3d_lidar'] = torch.tensor(box3d_lidar)
             dets[token]['label_preds'] = torch.tensor(labels)
@@ -289,16 +252,16 @@ def json_to_dets(nusc, json_file, output_pickle):
     print(f"Saved detections to {output_pickle}")
 
 
-# List of pickle files to merge
-pickle_files = ['./data/nuScenes/infos_train_10sweeps_withvelo_filter_True.pkl', '/workspace/CenterPoint/work_dirs/ad_pc_mlp_05/seed10_voxel_at_org01th_c42_exCarPed/cp_10_pseudo_bal_ad/inference_merged_results.pkl'] # '/workspace/CenterPoint/work_dirs/5_nusc_centerpoint_voxelnet_0075voxel_fix_bn_z/prediction_1.pkl']
+# # List of pickle files to merge
+# pickle_files = ['./data/nuScenes/infos_train_10sweeps_withvelo_filter_True.pkl', '/workspace/CenterPoint/work_dirs/ad_pc_mlp_05/seed10_voxel_at_org01th_c42_exCarPed/cp_10_pseudo_bal_ad/inference_merged_results.pkl'] # '/workspace/CenterPoint/work_dirs/5_nusc_centerpoint_voxelnet_0075voxel_fix_bn_z/prediction_1.pkl']
 
-# Directory to save the merged file
-output_dir = pickle_files[1].replace('prediction_1.pkl', '')
-output_file_path = os.path.join(output_dir, 'seed_and_pseudo_gt.pkl')
+# # Directory to save the merged file
+# output_dir = pickle_files[1].replace('prediction_1.pkl', '')
+# output_file_path = os.path.join(output_dir, 'seed_and_pseudo_gt.pkl')
 
-keyframe_json_path = "/workspace/CenterPoint/work_dirs/immo/cp_5_seed_2hz/results_tp.json"
-non_keyframe_json_path = "/workspace/CenterPoint/work_dirs/immo/cp_5_seed_20hz/results_tp.json"
-output_json_path = "/workspace/CenterPoint/work_dirs/immo/cp_5_seed_2hz/merged_results_tp.json"
+# keyframe_json_path = "/workspace/CenterPoint/work_dirs/immo/cp_5_seed_2hz/results_tp.json"
+# non_keyframe_json_path = "/workspace/CenterPoint/work_dirs/immo/cp_5_seed_20hz/results_tp.json"
+# output_json_path = "/workspace/CenterPoint/work_dirs/immo/cp_5_seed_2hz/merged_results_tp.json"
 
 # Merge data and save
 from ipdb import launch_ipdb_on_exception, set_trace
@@ -306,27 +269,26 @@ with launch_ipdb_on_exception():
     # Do after ImmoTracker results generation - Add detection_name
     import argparse
     parser = argparse.ArgumentParser()
+    parser.add_argument('--nusc_data_info_path', type=str, default=None)
+    parser.add_argument('--pseudo_path', type=str, default=None)
+    parser.add_argument('--workdir', type=str, default=None)
+
     parser.add_argument('--res_path', type=str, default=None)
     parser.add_argument('--cp_det_path', type=str, default=None)
     parser.add_argument('--tracking_to_detection', type=str, default=None)
     args = parser.parse_args()
 
-    if not args.res_path and not args.tracking_to_detection:
-        nusc = NuScenes(version='v1.0-trainval', dataroot="data/nuScenes", verbose=True)
-        json_file = './work_dirs/ad_pc_mlp_05/seed10_voxel_at_org01th_c42_exCarPed/cp_10_pseudo_bal_ad/inference_merged_results.json'
-        output_pickle = json_file.replace('json', 'pkl')
-        json_to_dets(nusc, json_file, output_pickle)
-
+    if args.nusc_data_info_path and args.pseudo_path:
         # merge seed and pseudo
-        data = update_data(pickle_files[0], pickle_files[1])
-        output_file_path = "/workspace/CenterPoint/work_dirs/10_nusc_centerpoint_voxelnet_0075voxel_fix_bn_z/seed_and_pseudoAD_gt.pkl"
+        data = update_data(args.nusc_data_info_path, args.pseudo_path)
+        output_file_path = os.path.join(args.workdir, 'gt_for_pseudo.pkl')
         with open(output_file_path, 'wb') as file:
             pkl.dump(data, file)
 
     if args.tracking_to_detection:
         tracking_to_detection(args.tracking_to_detection) #inference_results
     
-    # Add tracking_name from detection_name
+    ## Add tracking_name from detection_name
     # detection_to_tracking("/workspace/CenterPoint/work_dirs/immo/results/results.json")
     # merge_2hz_and_20hz_files(keyframe_json_path, non_keyframe_json_path, output_json_path)
 

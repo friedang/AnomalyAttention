@@ -1,3 +1,4 @@
+import argparse
 from pathlib import Path
 import os
 import json
@@ -314,7 +315,7 @@ def extract_gt_tracks(nusc: NuScenes, sample_tokens: List[str]) -> Dict[str, Lis
 
     gt_tracks = {k: t for k, t in gt_tracks.items() if t != []}
 
-    # set_trace()
+    
     length = [len(t) for t in gt_tracks.values()]
 
     print(f"Extracted up to {len(length)} tracks.")
@@ -372,7 +373,7 @@ def padd_scene_tracks(nusc, scene_track_map, tracks):
 
     lengths = [len(lst) for lst in tracks.values()]
     print(f"Minimum length of tracks is {min(lengths)} and Maximum is {max(lengths)}")
-    # set_trace()
+    
     return tracks
 
 
@@ -437,24 +438,43 @@ def remove_det_by_track_id(detection_results, tracks, len_thresh=2, score_thresh
     num_dets_final = len([det for t in detection_results['results'].values() for det in t])
     print(f"Removed {num_dets_original - num_dets_final} Detections with TP: {len(tp)} and FP: {len(fp)}")
     # assert len(tp) + len(fp) == num_dets_original - num_dets_final
-    # set_trace()
+    
 
     return detection_results
 
 
+def parse_arguments():
+    parser = argparse.ArgumentParser(description="Argument parser for settings.")
+    
+    parser.add_argument('--hz20', action='store_true', help="Enable 20Hz processing. Default is False.")
+    parser.add_argument('--gt', action='store_true', help="Use ground truth data. Default is False.")
+    parser.add_argument('--extract_pcs', action='store_true', help="Extract point clouds. Default is False.")
+    parser.add_argument('--val', action='store_true', help="Validation mode. Default is False.")
+    parser.add_argument('--remove_non_cp', action='store_true', help="Remove detections which are not in the original CenterPoint file. Default is False.")
+    parser.add_argument('--cp_det_file', type=str, required=True, help="Path to the CenterPoint detection file.")
+    parser.add_argument('--remove_det_by_track_len', action='store_true', help="Remove detections by track length. Default is False.")
+    parser.add_argument('--sample', type=int, default=None, help="Sample size for semi-supervised case (e.g., 5 seed or 10 seed). Default is None.")
+    
+    parser.add_argument('--immo_results', type=str, required=True, help="Path to the immobility results file.")
+    
+    args = parser.parse_args()
+    return args
+
+
 def main():
     # Load the JSON file
-    hz20 = False
+    args = parse_arguments()
 
-    sample = None # 5 seed # 10 seed
-    gt = False
-    extract_pcs = False
-    val = False
-    remove_non_cp = False
-    remove_det_by_track_len = False
-    # TODO ALWAYS USE results_tp
-    immo_results = '/workspace/CenterPoint/work_dirs/immo/cp_10_pseudo_org01/results_tp.json' #'/workspace/CenterPoint/work_dirs/Center_point_original_nusc_0075_flip/immo_results/results_tp.json' # './work_dirs/ad_mlp_05/aug_t5/nusc_validation_t01/inference_results.json' # '/workspace/CenterPoint/work_dirs/immo/cp_valset/cp_results.json'
-    cp_det_file = "/workspace/CenterPoint/work_dirs/5_nusc_centerpoint_voxelnet_0075voxel_fix_bn_z/eval_on_seed/2Hz/baseline_SCs_03Mean/infos_train_10sweeps_withvelo_filter_True.json"
+    hz20 = args.hz20
+    sample = args.sample
+    gt = args.gt
+    extract_pcs = args.extract_pcs
+    val = args.val
+    remove_non_cp = args.remove_non_cp
+    remove_det_by_track_len = args.remove_det_by_track_len
+    immo_results = args.immo_results
+    cp_det_file = args.cp_det_file
+
 
     # for 20 Hz
     # TODO for merged_results: run fix, extract pointclouds to npy for NK frames, adjust number of lidar points for NK
@@ -464,7 +484,7 @@ def main():
     detection_results = load_json(immo_results)
     detection_results = detection_results if 'results' in detection_results.keys() else {'results': detection_results}
     
-    # set_trace()
+    
     ## Save pointclouds as npy
     nusc = NuScenes(version='v1.0-trainval', dataroot="data/nuScenes", verbose=True)
     if extract_pcs:
@@ -518,7 +538,7 @@ def main():
         scene_names = create_splits_scenes()['val'] if val else create_splits_scenes()['train']
     tracks = load_json(immo_results)
 
-    # set_trace()
+    
     scene_mapping = create_scene_track_mapping(nusc, scene_names, tracks)
     save_json(scene_mapping, immo_results.replace('track_info', 'scene2trackname'))
 

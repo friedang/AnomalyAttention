@@ -20,9 +20,10 @@ import logging
 from det3d.datasets.nuscenes.nuscenes_track_dataset import SceneDataset
 from det3d.models.classifier.mlp import TrackMLPClassifier
 from det3d.models.classifier.pc_mlp import PCTrackMLPClassifier
-from det3d.models.classifier.voxel_at import VoxelTrackMLPClassifier
 from det3d.models.classifier.track2pc_mlp import Track2PCTrackMLPClassifier
 from det3d.models.classifier.transformer import TrackTransformerClassifier
+from det3d.models.classifier.anomaly_attention import AnomalyAttention
+from det3d.models.classifier.voxel_mlp import VoxelTrackMLPClassifier
 
 
 class FocalLoss(nn.Module):
@@ -61,7 +62,7 @@ class FocalLoss(nn.Module):
         # Get the probabilities
         pt = torch.exp(-bce_loss)  # Probability of the true class
         self.alpha = self.alpha.to(targets.device)
-        # set_trace()
+        
         alpha_t = self.alpha[targets.long()] if self.alpha.shape < targets.shape else self.alpha  # Apply class-specific weights
         focal_loss = alpha_t * (1 - pt) ** self.gamma * bce_loss
 
@@ -117,7 +118,7 @@ def save_gradients(grad):
 
 # Define BCEWithLogitsLoss with masking support
 def masked_loss(predictions, labels, class_weights=None):
-    # set_trace()
+    
     loss_fn = FocalLoss(alpha=class_weights, gamma=2.0) if class_weights is not None else nn.BCEWithLogitsLoss() # 
     # loss_fn = nn.BCEWithLogitsLoss() # 
     loss = loss_fn(predictions, labels)
@@ -230,10 +231,7 @@ def train(rank, world_size, args):
         shutil.copy(args.scenes_info.replace('scene2trackname.json', 'val_chunks.pt'), args.workdir)
         shutil.copy(args.scenes_info.replace('scene2trackname.json', 'train_chunks.pt'), args.workdir)
 
-    # assert train_dataset.chunks != val_dataset.chunks
-    # if args.single_class:
-    #     train_dataset.chunks = [chunk for chunk in train_dataset.chunks if args.single_class in [c['detection_name'] for c in chunk]]
-    #     val_dataset.chunks = [chunk for chunk in val_dataset.chunks if args.single_class in [c['detection_name'] for c in chunk]]
+    assert train_dataset.chunks != val_dataset.chunks
 
     logging.info(f"Training on {len(train_dataset)} samples - Validation on {len(val_dataset)} samples.")
 
@@ -262,10 +260,8 @@ def train(rank, world_size, args):
     not_used_weights = compute_class_weight('balanced', classes=np.array([0, 1]), y=data)
     logging.info(f"# FP samples: {num_0} - # TP samples: {num_1} - Class weights are {not_used_weights}")
 
-    # set_trace()
 
     # Set up samplers for distributed training
-    # set_trace()
     train_sampler = torch.utils.data.distributed.DistributedSampler(train_dataset) if world_size > 1 else None
     val_sampler = torch.utils.data.distributed.DistributedSampler(val_dataset) if world_size > 1 else None
 
@@ -279,14 +275,16 @@ def train(rank, world_size, args):
     elif args.pc:
         model = PCTrackMLPClassifier() # input_size=12, hidden_size=128, num_layers=3)
     elif args.voxel:
-        model = VoxelTrackMLPClassifier(
-            hidden_size=256,
-            num_layers=6,
-            num_heads=8,
-            mlp_feature_dim=256
-            ) # (input_size=12, hidden_size=128, num_layers=3)
+        model = VoxelTrackMLPClassifier(input_size=12, hidden_size=128, num_layers=3)
+    elif args.attention:
+            model = AnomalyAttention(
+                hidden_size=256,
+                num_layers=6,
+                num_heads=8,
+                mlp_feature_dim=256
+            )
     else:
-        model = TrackMLPClassifier() # (input_size=12, hidden_size=128, num_layers=3)
+        model = TrackMLPClassifier()
 
     device = torch.device(f'cuda:{rank}' if (not args.cpu) and torch.cuda.is_available() else 'cpu')
     model.to(device)
@@ -386,14 +384,8 @@ def train(rank, world_size, args):
 
                 weights = weights.to(device)
                 weights = weights[mask.bool()]
-                # weights = [0, weights[weights != 0].mean().item()]
-            # run was with gt, weights * 0.5, max norm 5, and weights max 1.45 worked dauntless-glade-378
-            # next run was with gt, weights * 0.5, max norm 30, and weights max 2.5 worked
             elif any(['gt' in i for i in detection_ids]):
-                # set_trace()
                 weights = weights * 0.5
-                # weights = torch.ones_like(tp) * 0.5
-                # weights = weights[mask.bool()].to(device)
             
             # last run was with gt, max norm 5, and weights max 1.45
             loss = masked_loss(masked_outputs, masked_labels, weights)
@@ -451,7 +443,8 @@ if __name__ == "__main__":
     parser.add_argument('--gt', action="store_true", help="Use GT track info")
     parser.add_argument('--pc', action="store_true", help="Use point clouds")
     parser.add_argument('--track_pc', action="store_true", help="Use point clouds")
-    parser.add_argument('--voxel', action="store_true", help="Use point clouds")
+    parser.add_argument('--attention', action="store_true", help="Use AnomalyAttention")
+    parser.add_argument('--voxel', action="store_true", help="Use VoxelNetAD")
     parser.add_argument('--cpu', action="store_true", help="Use CPU")
     parser.add_argument('--load_chunks_from', type=str, help="Use GT track info")
     parser.add_argument('--workdir', type=str, required=True, help="Directory to workdir")
@@ -484,7 +477,7 @@ if __name__ == "__main__":
                     if not os.path.isdir(args.workdir):
                         os.mkdir(args.workdir)
                     args.single_class = i
-                    # set_trace()
+                    
                     train(0, world_size, args)
             else:
                 train(0, world_size, args)

@@ -165,8 +165,6 @@ class SceneDataset(Dataset):
             assert len([v for val in scenes_info.values() for v in val]) == len(track_info)
             logging.info(f"Number of tracks after length threshold filtering: {len(track_info)}")
 
-            # set_trace()
-
             max_scene_size = max([len(v) for v in scenes_info.values()])
             logging.info(f"Maximum Scene size is: {max_scene_size}")
             self.scene_names = list(scenes_info.keys())
@@ -191,7 +189,7 @@ class SceneDataset(Dataset):
                     else:
                         gt_track_info = {k: v + [self.dummy] * num_dummy_pads 
                                          for k, v in gt_track_info.items() if 'car' not in k and 'ped' not in k and len([det for det in v if det['TP'] in [0, 1]]) > lengths_thresh}
-                    # set_trace()
+                    
                     gt_scenes_info = {k: [name for name in v if name in gt_track_info.keys()] for k, v in gt_scenes_info.items()}
                     max_gt_scene_size = max([len(v) for v in gt_track_info.values()])
                     logging.info(f"Maximum GT Scene size is: {max_gt_scene_size}")
@@ -204,9 +202,9 @@ class SceneDataset(Dataset):
                     self.fill_chunks(track_info, scenes_info, max_scene_size, gt=False)
 
                 if gt_scenes_info_path and i == 0:
-                    # set_trace()
+                    
                     # self.fill_chunks(gt_track_info, gt_scenes_info, max_gt_scene_size, gt=True)
-                    for _ in range(1):
+                    for _ in range(2):
                         self.fill_chunks(gt_track_info, gt_scenes_info, max_gt_scene_size, gt=True, augment=True)
 
                 if sample_ratio:

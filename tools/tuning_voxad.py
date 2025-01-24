@@ -26,7 +26,7 @@ import shutil
 import logging
 
 from det3d.datasets.nuscenes.nuscenes_track_dataset import SceneDataset
-from det3d.models.classifier.voxel_at import VoxelTrackMLPClassifier
+from det3d.models.classifier.anomaly_attention import VoxelTrackMLPClassifier
 
 from tools.train_ad import validate, masked_loss, process_point_clouds
 

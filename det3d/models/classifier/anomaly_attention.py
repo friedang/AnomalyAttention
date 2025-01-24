@@ -108,7 +108,7 @@ class Voxelization(object):
         return voxels
 
 
-class VoxelTrackMLPClassifier(nn.Module):
+class AnomalyAttention(nn.Module):
     def __init__(self, input_size=12, hidden_size=128, num_layers=3, dropout=0.1,
                  track_len=5, mlp_feature_dim=128, num_heads=16):
         """
@@ -119,7 +119,7 @@ class VoxelTrackMLPClassifier(nn.Module):
             num_layers (int): Number of hidden layers.
             dropout (float): Dropout probability for regularization.
         """
-        super(VoxelTrackMLPClassifier, self).__init__()
+        super(AnomalyAttention, self).__init__()
 
         self.input_size = input_size
         self.hidden_size = hidden_size

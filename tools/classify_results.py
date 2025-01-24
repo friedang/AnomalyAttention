@@ -1,3 +1,4 @@
+import argparse
 import json
 from typing import Dict, List
 from typing import Callable
@@ -246,7 +247,7 @@ def classify_detections(detection_results, nusc, eval_split, result_path, output
         # Accumulate metrics
         _, tokens, dist_tps = accumulate(gt_boxes, pred_boxes, class_name, dist_fcn)
 
-        # set_trace()
+        
         # Update TP classification
         for i, sample_token in enumerate(tokens):
             dist_TP = [dist_tps[j][i] for j in range(4)]
@@ -254,7 +255,7 @@ def classify_detections(detection_results, nusc, eval_split, result_path, output
                 tp_classification[sample_token][class_name] = []
             tp_classification[sample_token][class_name].append(dist_TP)
 
-    # set_trace()
+    
     # Add TP classification to detection results
     print('Add TP classification to detection results')
     for sample_token, preds in tqdm.tqdm(detection_results['results'].items()):
@@ -267,7 +268,7 @@ def classify_detections(detection_results, nusc, eval_split, result_path, output
                 # assert if dist_TP is correct
                 if not all([result['dist_TP'][i] <= result['dist_TP'][i+1] for i in range(3)]):
                     print(f"Incorrect distance thresh for {result['dist_TP']}")
-                # set_trace()
+                
                 # c=1
             else:
                 result['dist_TP'] = [0, 0, 0, 0]
@@ -283,9 +284,11 @@ def classify_detections(detection_results, nusc, eval_split, result_path, output
 
 
 def main():
-    # Load the JSON file
-    # input_file = '/workspace/CenterPoint/work_dirs/ad_mlp_05/Resnet_baseline_with_Focal_gt/nusc_validation/immo_results.json'
-    input_file = "/workspace/CenterPoint/work_dirs/immo/results/results.json"
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--input_file', type=str, default=None)
+    args = parser.parse_args()
+
+    input_file = args.input_file
     output_file = input_file.replace('.json', '_tp.json')
     output_dir = input_file.replace('results.json', '')
     detection_results = load_json(input_file)
@@ -302,22 +305,6 @@ def main():
     # Initialize nuScenes
     from nuscenes import NuScenes
     nusc = NuScenes(version='v1.0-trainval', dataroot="data/nuScenes", verbose=True)
-
-    # Lists to hold the keyframe and non-keyframe sample tokens
-    keyframe_tokens = []
-    non_keyframe_tokens = []
-
-    # Loop through the detection results
-    # for sample_token in detection_results['results']:        
-    #     # Try to find the sample in the keyframe (sample) table
-    #     try:
-    #         sample_record = nusc.get('sample', sample_token)
-    #         keyframe_tokens.append(sample_token)
-    #     except:
-    #         non_keyframe_tokens.append(sample_token)
-
-
-    # assert len(keyframe_tokens) == 934
     
     # Classify detections
     updated_results = classify_detections(detection_results, nusc, 'train', input_file, output_dir)

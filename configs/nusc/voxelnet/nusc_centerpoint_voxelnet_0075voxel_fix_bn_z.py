@@ -166,7 +166,6 @@ test_pipeline = [
 project_name="cp_5seed"
 train_anno = "data/nuScenes/infos_train_10sweeps_withvelo_filter_True.pkl"
 val_anno = "data/nuScenes/infos_val_10sweeps_withvelo_filter_True.pkl"
-# pseudo_anno = "/workspace/CenterPoint/work_dirs/10_nusc_centerpoint_voxelnet_0075voxel_fix_bn_z/gt_for_pseudo.pkl"
 test_anno = "data/nuScenes/infos_test_10sweeps_withvelo.pkl"
 sample_ratio=1
 load_indices= None # '/workspace/CenterPoint/work_dirs/5_nusc_centerpoint_voxelnet_0075voxel_fix_bn_z/train_indices.pth'
@@ -198,19 +197,6 @@ data = dict(
         class_names=class_names,
         pipeline=test_pipeline,
     ),
-    # pseudo/train val
-    # val=dict(
-    #     type=dataset_type,
-    #     root_path=data_root,
-    #     info_path=train_anno,
-    #     ann_file=train_anno,
-    #     test_mode=True,
-    #     nsweeps=nsweeps,
-    #     class_names=class_names,
-    #     pipeline=test_pipeline,
-    #     load_indices=load_indices,
-    #     sample_ratio=sample_ratio,
-    # ),
     test=dict(
         type=dataset_type,
         root_path=data_root,
@@ -220,13 +206,11 @@ data = dict(
         nsweeps=nsweeps,
         class_names=class_names,
         pipeline=test_pipeline,
-        load_indices=None, # pseudo_indices, # load_indices,
-        sample_ratio=1, #sample_ratio,
+        load_indices=load_indices, # pseudo_indices, # load_indices,
+        sample_ratio=sample_ratio, #sample_ratio,
         hz20=False,
     ),
 )
-
-
 
 optimizer_config = dict(grad_clip=dict(max_norm=35, norm_type=2))
 # optimizer
