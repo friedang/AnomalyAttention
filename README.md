@@ -1,5 +1,7 @@
 # Track-based Anomaly Detection
 
+For more details, please refer to the [Master's Thesis](docs/Anomaly_Detection_for_Semi-Supervised_3D_Friedrich_Dang_3773626.pdf).
+
 <p align="center"> <img src='docs/teaser.png' align="center" height="230px"> </p>
 
 Framework overview: Data preprocessing steps are (a), (b), and (c). The detection model (a), CenterPoint [60], predicts 3D bounding boxes from a point cloud input. The tracking model (b), ImmortalTracker [55], generates tracks based on these detections, which are denoised (c) based on their lengths. Finally, our anomaly detector (d) identifies anomalous detections within these tracks, leveraging track features and their associated point clouds.
